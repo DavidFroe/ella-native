@@ -23,15 +23,17 @@ if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$TARGET" exit 2>/dev/null; then
 fi
 echo -e "${GREEN}✅ SSH-Verbindung steht.${NC}"
 
-# 3. PACKING MEMORY
+# 3. PACKING MEMORY (Brain-Sync)
 BKP_NAME="ella_migration_$(date +%s).tar.gz"
-echo -e "\n📦 2. Packe Gedächtnis (Memory-Transfer)..."
+echo -e "\n📦 2. Packe Gedächtnis (Gedächtnis)..."
 cd "$HOME" || exit
-tar -czf "/tmp/$BKP_NAME" .config/openclaw-kibot/ .ella_thoughts 2>/dev/null
+FILES_TO_PACK=(".config/openclaw-kibot/" ".ella_thoughts")
+[ -f "ella.conf" ] && FILES_TO_PACK+=("ella.conf")
+tar -czf "/tmp/$BKP_NAME" "${FILES_TO_PACK[@]}" 2>/dev/null
 echo -e "${GREEN}✅ Paket geschnürt (/tmp/$BKP_NAME)${NC}"
 
 # 4. TRANSFER
-echo -e "\n🛰️  3. Teleportiere Daten zum Pi..."
+echo -e "\n🛰️  3. Teleportiere Daten zum Pi (Environment-Sync)..."
 scp "/tmp/$BKP_NAME" "$TARGET:/home/$TARGET_USER/" || { echo -e "${RED}Transfer fehlgeschlagen.${NC}"; exit 1; }
 echo -e "${GREEN}✅ Daten übertragen.${NC}"
 
@@ -42,9 +44,11 @@ ssh "$TARGET" "
     tar -xzf $BKP_NAME -C /home/$TARGET_USER/
     sudo chown -R $TARGET_USER:$TARGET_USER /home/$TARGET_USER/.config/openclaw-kibot/
     sudo chown -R $TARGET_USER:$TARGET_USER /home/$TARGET_USER/.ella_thoughts
+    [ -f 'ella.conf' ] && sudo chown $TARGET_USER:$TARGET_USER /home/$TARGET_USER/ella.conf
     rm $BKP_NAME
-    echo -e '✅ Entpackt & Berechtigungen gesetzt.'
+    echo -e '✅ Entpackt & Berechtigungen am Zielort gesetzt.'
 "
+
 
 # 6. SERVICE INIT (Remote)
 echo -e "\n🚀 5. Starte Ella-Pi Gateway remote..."

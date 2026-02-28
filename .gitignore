@@ -1,12 +1,40 @@
-# Ella Gehirn & Erinnerungen (STRENG GEHEIM)
-.config/openclaw-kibot/
-sessions/
-logs/
-*.log
-*.tar.gz
-openclaw.json
+# Ella-Pi Privacy & Security (v10.0)
+# ------------------------------------------------------------
+# Verhindere das Hochladen von privaten Daten & Tokens
 
-# System & Node
-node_modules/
-.env
+# Logs & Thoughts
+*.log
+.ella.log*
+.ella_gw.log
+.ella_owltrail.log
+.ella_thoughts
+
+# Private Sessions & Knowledge
+.config/openclaw-kibot/.openclaw/agents/*/sessions/
+.config/openclaw-kibot/.openclaw/agents/*/memory/
+.config/openclaw-kibot/.openclaw/db/
+.config/openclaw-kibot/.openclaw/backups/
+.config/openclaw-kibot/.openclaw/.cache/
+
+# User-specific Configs (Tokens!)
+openclaw.json
+ella.conf
+
+# Temporary Files
+*.bak
+*.tmp
+ella_backup_*.tar.gz
+ella_migration_*.tar.gz
+/tmp/ella*
+
+# IDE & OS
+.vscode/
+.idea/
 .DS_Store
+__pycache__/
+*.pyc
+
+# Local IPC/Sockets
+ipc/
+/tmp/wachtler.fifo
+/tmp/ella.lock
