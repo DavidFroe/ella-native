@@ -1,0 +1,12 @@
+# Ella Gehirn & Erinnerungen (STRENG GEHEIM)
+.config/openclaw-kibot/
+sessions/
+logs/
+*.log
+*.tar.gz
+openclaw.json
+
+# System & Node
+node_modules/
+.env
+.DS_Store

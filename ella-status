@@ -1,0 +1,47 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+echo -e "${BLUE}📊 --- ELLA-PI MASTER STATUS (v${ELLA_VERSION}) ---${NC}"
+echo -e "${GREY}------------------------------------------------------------${NC}"
+
+# 1. PROCESS STATUS
+echo -e "${MAGENTA}🌀 ACTIVE PROCESSES:${NC}"
+GW_PID=$(pgrep -f "openclaw gateway|openclaw-gateway" | head -1)
+[ -n "$GW_PID" ] && echo -e "  🛰️  Gateway:    ${GREEN}RUNNING (PID $GW_PID)${NC}" || echo -e "  🛰️  Gateway:    ${RED}OFFLINE${NC}"
+
+OWL_PID=$(pgrep -f "owlTrail.py" | head -1)
+[ -n "$OWL_PID" ] && echo -e "  🦉 owlTrail:   ${GREEN}RUNNING (PID $OWL_PID)${NC}" || echo -e "  🦉 owlTrail:   ${RED}OFFLINE${NC}"
+
+# 2. SYSTEM RESOURCES
+echo -e "\n${MAGENTA}📈 SYSTEM LOAD:${NC}"
+CPU_LOAD=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
+RAM_FREE=$(free -m | awk '/Mem:/ { printf "%0.2f%%", $3/$2*100 }')
+echo -e "  🧠 CPU:         ${YELLOW}$CPU_LOAD${NC}"
+echo -e "  💾 RAM:         ${YELLOW}$RAM_FREE${NC}"
+
+# 3. OPENCLAW STATUS
+echo -e "\n${MAGENTA}🧠 AGENT PROFILE:${NC}"
+OC_STATUS=$(timeout 5 $OPENCLAW_BIN status --all 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g')
+if [ -n "$OC_STATUS" ]; then
+    OC_VERSION=$(echo "$OC_STATUS" | grep -E '│\s+Version\s+│' | awk -F '│' '{print $3}' | xargs)
+    OC_AGENTS=$(echo "$OC_STATUS" | grep -E '│\s+Agents\s+│' | awk -F '│' '{print $3}' | xargs)
+    OC_CHANNELS=$(echo "$OC_STATUS" | awk -F '│' '/ON/ && /OK/ {print $2}' | xargs | sed 's/ /, /g')
+    
+    echo -e "  ✨ Version:    ${CYAN}${OC_VERSION:-?}${NC}"
+    echo -e "  🤖 Agents:     ${CYAN}${OC_AGENTS:-?}${NC}"
+    echo -e "  📡 Channels:   ${GREEN}${OC_CHANNELS:-Keine aktiven Kanäle}${NC}"
+else
+    echo -e "  ${RED}OpenClaw Gateway antwortet nicht.${NC}"
+fi
+
+# 4. SESSIONS
+echo -e "\n${MAGENTA}💬 LATEST SESSIONS:${NC}"
+SESSIONS=$($OPENCLAW_BIN sessions 2>/dev/null | grep -E '^(direct|group)' | head -3)
+if [ -n "$SESSIONS" ]; then
+    echo "$SESSIONS"
+else
+    echo -e "  ${GREY}(Keine aktiven Sessions)${NC}"
+fi
+
+echo -e "${GREY}------------------------------------------------------------${NC}"
+check_gw_http && echo -e "${GREEN}${BOLD}✅ RESULT: Ella-Pi Status OK${NC}" || echo -e "${RED}${BOLD}❌ RESULT: Ella-Pi Status ERROR${NC}"

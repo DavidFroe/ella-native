@@ -1,0 +1,32 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+COMMAND="$1"
+
+if [ -z "$COMMAND" ]; then
+    echo -e "${RED}❌ Keine Aktion angegeben! Nutze:${NC}"
+    echo -e "  ella --tele show        (Zeigt die letzten Nachrichten)"
+    echo -e "  ella --tele \"text...\"   (Sendet eine Nachricht)"
+    exit 1
+fi
+
+require_container
+
+if [ "$COMMAND" == "show" ] || [ "$COMMAND" == "list" ]; then
+    echo -e "${CYAN}📥 Lese Telegram-Nachrichten...${NC}"
+    if is_inside; then
+        openclaw message read --channel telegram --limit 10
+    else
+        podman exec --user david "$CONTAINER_NAME" bash -lc 'openclaw message read --channel telegram --limit 10'
+    fi
+else
+    # Sende Nachricht
+    MSG="$*"
+    echo -e "${BLUE}📤 Sende an Telegram...${NC}"
+    if is_inside; then
+        openclaw message send --channel telegram --message "$MSG"
+    else
+        podman exec -e MSG="$MSG" --user david "$CONTAINER_NAME" bash -lc 'openclaw message send --channel telegram --message "$MSG"'
+    fi
+    echo -e "${GREEN}✅ Nachricht gesendet!${NC}"
+fi

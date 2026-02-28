@@ -1,0 +1,13 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+# Das Logfile der Geheimkonsole
+SECRET_LOG="/tmp/ella_secret_console.log"
+
+echo -e "${CYAN}🕵️‍♂️ ELLA LIVE-VIEW (Geheimkonsole)${NC}"
+echo -e "${YELLOW}Drücke [Strg+C] um den Monitor zu schließen (der Bot läuft weiter).${NC}"
+echo "--------------------------------------------------------"
+
+# Wir nutzen 'openclaw logs' im Container
+echo -e "${CYAN}Streame Live-Logs aus dem Container...${NC}"
+distrobox enter "$CONTAINER_NAME" -- openclaw logs --follow

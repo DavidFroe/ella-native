@@ -1,0 +1,39 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+VPS_USER="root"
+VPS_IP="10.0.0.1"
+SSH_KEY="$HOME/.ssh/ella_id"
+REMOTE_TASK_FILE="~/ella-task.json"
+LOCAL_TASK_FILE="/tmp/ella-task.json"
+
+echo -e "${CYAN}📡 ELLA REMOTE SYNC (VPS: $VPS_IP)...${NC}"
+
+# 1. PRÜFUNG: Gibt es Tasks?
+if ssh -i "$SSH_KEY" -o ConnectTimeout=3 -q "$VPS_USER@$VPS_IP" "[ -f $REMOTE_TASK_FILE ]"; then
+    echo -e "📥 Neuer Task gefunden. Lade herunter..."
+    
+    # 2. DOWNLOAD
+    scp -i "$SSH_KEY" -q "$VPS_USER@$VPS_IP:$REMOTE_TASK_FILE" "$LOCAL_TASK_FILE"
+    
+    # 3. PARSING (Wir nehmen python3, da jq oft fehlt)
+    # Wir suchen den Key "prompt"
+    PROMPT=$(python3 -c "import json, sys; print(json.load(open('$LOCAL_TASK_FILE'))['prompt'])" 2>/dev/null)
+    
+    if [ -n "$PROMPT" ]; then
+        echo -e "📝 Aufgabe: ${YELLOW}\"$PROMPT\"${NC}"
+        
+        # 4. AUSFÜHRUNG
+        # Wir nutzen ella-ask, das den Agenten triggert
+        ~/.local/bin/ella-ask "$PROMPT"
+        
+        # 5. CLEANUP (Remote löschen, damit er nicht nochmal läuft)
+        ssh -i "$SSH_KEY" -q "$VPS_USER@$VPS_IP" "rm $REMOTE_TASK_FILE"
+        echo -e "✅ Task erledigt und gelöscht."
+    else
+        echo -e "${RED}❌ Fehler: Konnte 'prompt' nicht aus JSON lesen.${NC}"
+        cat "$LOCAL_TASK_FILE"
+    fi
+else
+    echo -e "💤 Kein neuer Task vorhanden."
+fi

@@ -1,0 +1,24 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+echo -e "${BLUE}🩺 ELLA DIAGNOSE SYSTEM (v1.0)${NC}"
+require_container
+
+echo -e "\n${CYAN}1. System Doctor (Deep Scan)${NC}"
+echo "----------------------------------------"
+distrobox enter "$CONTAINER_NAME" -- openclaw doctor --non-interactive
+
+echo -e "\n${CYAN}2. Status Deep Check${NC}"
+echo "----------------------------------------"
+distrobox enter "$CONTAINER_NAME" -- openclaw status --deep
+
+echo -e "\n${CYAN}3. Usage & Quotas${NC}"
+echo "----------------------------------------"
+distrobox enter "$CONTAINER_NAME" -- openclaw status --usage
+
+echo -e "\n${CYAN}4. Resource Check (Node.js)${NC}"
+echo "----------------------------------------"
+# Wir suchen den node Prozess im Container und zeigen Speicher an
+distrobox enter "$CONTAINER_NAME" -- ps aux | grep "node" | grep "gateway" | awk '{print "PID: "$2", CPU: "$3"%, RAM: "$4"%, TIME: "$10}'
+
+echo -e "\n${GREEN}Diagnose abgeschlossen.${NC}"

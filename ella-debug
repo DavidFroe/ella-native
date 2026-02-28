@@ -1,0 +1,19 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+echo -e "${RED}🐞 ELLA DEBUG MODE (Verbose Gateway)${NC}"
+echo -e "${YELLOW}HINWEIS: Dies stoppt den Hintergrund-Dienst und startet das Gateway neu.${NC}"
+echo -e "${YELLOW}Drücke Strg+C um den Debugger zu beenden (Dienst bleibt dann aus).${NC}"
+
+require_container
+
+# 1. Bestehendes Gateway killen
+echo -e "🛑 Stoppe Hintergrund-Dienst..."
+distrobox enter "$CONTAINER_NAME" -- pkill -f "node.*openclaw gateway" 2>/dev/null
+
+# 2. Start im Verbose-Modus (Foreground)
+echo -e "🚀 Starte Gateway (Verbose)..."
+distrobox enter "$CONTAINER_NAME" -- openclaw gateway --verbose
+
+# 3. Wenn User beendet
+echo -e "\n${GREY}Debugger beendet. Starte den Dienst neu mit 'ella --start' (oder er läuft weiter).${NC}"

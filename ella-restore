@@ -1,0 +1,92 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+# --- KONFIGURATION ---
+BACKUP_DIR="$HOME/ella-backups"
+RESTORE_IMG="ella-restore-img"
+
+echo -e "${BLUE}♻️  ELLA RESTORE SYSTEM${NC}"
+log_info "Quell-Verzeichnis: $BACKUP_DIR"
+echo "--------------------------------------------------------"
+
+# 1. Backups auflisten
+FILES=($(ls -t "$BACKUP_DIR"/ella_backup_*.tar.gz 2>/dev/null))
+
+if [ ${#FILES[@]} -eq 0 ]; then
+    log_error "Keine Backups gefunden!"
+    exit 1
+fi
+
+PS3="Wähle ein Backup (Nummer): "
+select FILE in "${FILES[@]}" "Abbrechen"; do
+    case $FILE in
+        "Abbrechen") echo "Abbruch."; exit 0 ;;
+        *) 
+            if [ -z "$FILE" ]; then 
+                echo "Ungültige Auswahl."
+            else
+                TARGET_BACKUP="$FILE"
+                break
+            fi
+            ;;
+    esac
+done
+
+echo -e "\nGewählt: ${CYAN}$(basename "$TARGET_BACKUP")${NC}"
+
+# VALIDIERUNG VOR DEM LÖSCHEN
+log_info "Prüfe Backup-Integrität..."
+if ! gzip -t "$TARGET_BACKUP"; then
+    log_error "Backup-Datei ist beschädigt (gzip check failed)!"
+    exit 1
+fi
+
+echo -e "${YELLOW}Achtung: Dies wird den aktuellen Container '$CONTAINER_NAME' ersetzen.${NC}"
+echo -n "Sicher wiederherstellen? [J/n] "
+read -r CONFIRM
+if [[ "$CONFIRM" =~ ^([nN][oO]|[nN])$ ]]; then
+    echo "Abbruch."
+    exit 0
+fi
+
+# 2. IMAGE LADEN (OHNE CONTAINER ZU LÖSCHEN)
+# Wir laden das Image. Da es im Backup meist denselben Namen hat (Snapshottag),
+# wird es das alte Image überschreiben oder als <none> taggen.
+# Das ist okay, solange der Container noch läuft.
+log_info "Lade Image aus Backup (das kann dauern)..."
+
+# Wir nutzen eine temporäre Pipe, um das Resultat zu fangen
+LOAD_OUT=$(zcat "$TARGET_BACKUP" | podman load 2>&1)
+LOADED_IMAGE=$(echo "$LOAD_OUT" | grep -oP 'Loaded image: \K.*')
+
+if [ -z "$LOADED_IMAGE" ]; then
+    log_error "Fehler beim Laden des Images!"
+    echo "Output: $LOAD_OUT"
+    exit 1
+fi
+
+log_info "Image erfolgreich geladen: $LOADED_IMAGE"
+
+# 3. CONTAINER TAUSCH (TRANSAKTION)
+log_info "Stoppe und ersetze Container..."
+
+if distrobox stop -Y "$CONTAINER_NAME" 2>/dev/null; then
+    # Backup des alten Containers? Nein, wir löschen ihn jetzt, da wir das neue Image haben.
+    distrobox rm "$CONTAINER_NAME" --force 2>/dev/null
+else
+    log_error "Konnte Container nicht stoppen. Abbruch."
+    exit 1
+fi
+
+# 4. NEU ERSTELLEN
+log_info "Erstelle Container '$CONTAINER_NAME' aus Backup..."
+if distrobox create -n "$CONTAINER_NAME" -i "$LOADED_IMAGE" --yes; then
+    echo -e "${GREEN}✅ Restore erfolgreich!${NC}"
+    echo "Tipp: Starte mit 'ella --start'."
+    
+    # Optional: Aufräumen von Dangling Images
+    podman image prune -f >/dev/null 2>&1
+else
+    log_error "Fehler beim Erstellen des Containers."
+    exit 1
+fi

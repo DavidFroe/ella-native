@@ -1,0 +1,86 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+# --- KONFIGURATION ---
+BACKUP_DIR="$HOME/ella-backups"
+RETENTION_DAYS=7
+TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+FILENAME="ella_backup_${TIMESTAMP}.tar.gz"
+SNAPSHOT_NAME="ella-snapshot-${TIMESTAMP}"
+INTERACTIVE=true
+
+# Argumente parsen
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --cron) INTERACTIVE=false ;;
+        --dir) BACKUP_DIR="$2"; shift ;;
+        --keep) RETENTION_DAYS="$2"; shift ;;
+        *) echo "Unbekannt: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+# Logging Helper (Adapter to core)
+log() {
+    # Strip colors for log file if needed, but core handles that.
+    # We map log to log_info
+    log_info "$1"
+}
+
+log "📦 ELLA BACKUP SYSTEM (v1.0)"
+log "Ziel: $BACKUP_DIR"
+log "Rotation: Behalte $RETENTION_DAYS Tage"
+
+# 1. Vorbereitung
+mkdir -p "$BACKUP_DIR"
+
+# Check ob Container existiert
+if ! podman ps -a --format '{{.Names}}' | grep -q "$CONTAINER_NAME"; then
+    log_error "Fehler: Container '$CONTAINER_NAME' existiert nicht!"
+    exit 1
+fi
+
+# 2. Snapshot erstellen (Commit)
+log "📸 Erstelle Snapshot (Commit)..."
+if podman commit "$CONTAINER_NAME" "$SNAPSHOT_NAME" >/dev/null; then
+    log "✅ Snapshot erstellt: $SNAPSHOT_NAME"
+else
+    log_error "Fehler beim Snapshot!"
+    exit 1
+fi
+
+# 3. Export & Kompression
+TARGET_FILE="$BACKUP_DIR/$FILENAME"
+log "💾 Exportiere & Komprimiere nach $FILENAME ..."
+
+# Pipe: save -> gzip -> file
+if podman save "$SNAPSHOT_NAME" | gzip > "$TARGET_FILE"; then
+    log "✅ Backup erfolgreich gespeichert (${TARGET_FILE})"
+    SIZE=$(du -h "$TARGET_FILE" | cut -f1)
+    log "   Größe: $SIZE"
+else
+    log_error "Fehler beim Export!"
+    # Cleanup Snapshot
+    podman rmi "$SNAPSHOT_NAME" >/dev/null 2>&1
+    exit 1
+fi
+
+# 4. Cleanup (Snapshot löschen)
+log "🧹 Aufräumen (Temporäres Image)..."
+podman rmi "$SNAPSHOT_NAME" >/dev/null 2>&1
+
+# 5. Rotation (Alte Backups löschen)
+log "🔄 Rotation (Lösche Backups älter als $RETENTION_DAYS Tage)..."
+COUNT_BEFORE=$(find "$BACKUP_DIR" -name "ella_backup_*.tar.gz" | wc -l)
+find "$BACKUP_DIR" -name "ella_backup_*.tar.gz" -mtime +$RETENTION_DAYS -delete
+COUNT_AFTER=$(find "$BACKUP_DIR" -name "ella_backup_*.tar.gz" | wc -l)
+DELETED=$((COUNT_BEFORE - COUNT_AFTER))
+
+if [ "$DELETED" -gt 0 ]; then
+    log "🗑️  $DELETED alte Backups gelöscht."
+else
+    log "Keine alten Backups gefunden."
+fi
+
+log "✨ Backup-Vorgang abgeschlossen."
+exit 0

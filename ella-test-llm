@@ -1,0 +1,44 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+echo -e "${BLUE}🔎 LLM-BACKEND CONNECTION TEST${NC}"
+echo -e "${GREY}-----------------------------------------${NC}"
+
+# Check owlTrail (8081)
+echo -ne "  🔗 owlTrail (Port 8081)... "
+RESPONSE=$(curl -s --max-time 3 http://127.0.0.1:8081/v1/models 2>/dev/null)
+if [ $? -eq 0 ] && [ -n "$RESPONSE" ]; then
+    echo -e "${GREEN}ONLINE${NC}"
+    # Context window info
+    echo -e "     - Status: Running"
+else
+    echo -e "${RED}OFFLINE${NC}"
+fi
+
+# Check LM Studio (1234)
+echo -ne "  🔗 LM Studio (Port 1234)... "
+RESPONSE=$(curl -s --max-time 3 http://127.0.0.1:1234/v1/models 2>/dev/null)
+if [ $? -eq 0 ] && [ -n "$RESPONSE" ]; then
+    echo -e "${GREEN}ONLINE${NC}"
+else
+    echo -e "${YELLOW}OFFLINE (Optional)${NC}"
+fi
+
+echo -e "${GREY}-----------------------------------------${NC}"
+
+# Check current config context window
+echo -ne "  📝 Config Context Window (lm-1)... "
+CTX=$(grep -oP '"contextWindow":\s*\K\d+' "$OPENCLAW_JSON_PATH" 2>/dev/null | head -n 1)
+if [ -n "$CTX" ]; then
+    if [ "$CTX" -ge 32000 ]; then
+        echo -e "${GREEN}${CTX} tokens (Good)${NC}"
+    else
+        echo -e "${YELLOW}${CTX} tokens (Warn: < 32k)${NC}"
+    fi
+else
+    echo -e "${RED}NOT FOUND in config.${NC}"
+fi
+
+echo -e "${GREY}-----------------------------------------${NC}"
+echo -e "${CYAN}Tipp: Nutze 'ella --context large' um den Speicher zu vergrößern.${NC}"
+

@@ -1,0 +1,47 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+# --- ELLA-PI MASTER LAUNCHER ---
+echo -e "${BLUE}🚀 ELLA-PI: Brute-Force Startup (v10.0)${NC}"
+
+# 1. PORT CLEANUP (Native)
+echo -ne "  🔪 Cleaning Ports ($GATEWAY_PORT, $OWLTRAIL_PORT)... "
+sudo fuser -k $GATEWAY_PORT/tcp 2>/dev/null || true
+sudo fuser -k $OWLTRAIL_PORT/tcp 2>/dev/null || true
+sleep 1
+echo -e "${GREEN}OK${NC}"
+
+# 2. TOKEN SYNC
+sync_tokens
+export_gateway_token
+
+# 3. OPENCLAW GATEWAY (Native Launch)
+echo -ne "  🚀 Launching OpenClaw Gateway... "
+nohup $OPENCLAW_BIN gateway --force --bind 0.0.0.0 > "$HOME/.ella_gw.log" 2>&1 &
+sleep 2
+
+# 4. OWLTRAIL PROXY (Native Launch)
+if [ -f "$OWLTRAIL_BIN" ]; then
+    echo -ne "  🛰️  Launching owlTrail Proxy...   "
+    nohup python3 "$OWLTRAIL_BIN" > "$HOME/.ella_owltrail.log" 2>&1 &
+    sleep 1
+fi
+
+# 5. HEALTH CHECK LOOP
+echo -ne "  🏥 Waiting for Sync... "
+MAX_RETRY=15
+for ((i=1; i<=MAX_RETRY; i++)); do
+    # Origin Trust
+    $OPENCLAW_BIN devices approve --all >/dev/null 2>&1
+    
+    if check_gw_http; then
+         echo -e "${GREEN}ONLINE${NC}"
+         exit 0
+    fi
+    sleep 1
+    echo -ne "."
+done
+
+echo -e " ❌ ${RED}Timeout.${NC}"
+exit 1
+

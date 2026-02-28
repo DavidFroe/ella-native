@@ -1,0 +1,9 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+echo -e "${CYAN}💬 ELLA DIRECT CHAT (CLI Mode)${NC}"
+echo -e "${YELLOW}(Drücke Strg+C oder tippe 'exit' zum Beenden)${NC}"
+require_container
+
+# Starte den Chat im Container
+distrobox enter "$CONTAINER_NAME" -- openclaw chat

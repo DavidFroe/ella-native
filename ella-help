@@ -1,0 +1,35 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+echo -e "${BLUE}${BOLD}🦉 ELLA-PI MASTER CLI - v$ELLA_VERSION (Bare Metal)${NC}"
+echo -e "${GREY}------------------------------------------------------------${NC}"
+
+echo -e "${BOLD}💬 CORE INTERACTION:${NC}"
+echo -e "  ${GREEN}ella [text]${NC}             Native Unterhaltung mit Ella"
+echo -e "  ${GREEN}ella --status${NC}          Status von Gateway & owlTrail Proxy"
+echo -e "  ${GREEN}ella --health${NC}          Self-Healing Deep-Scan"
+echo -e "  ${GREEN}ella --version${NC}         Zeigt Build v10.0 (Ella-Pi Edition)"
+
+echo -e "\n${BOLD}🌍 GLOBETROTTER (Migration):${NC}"
+echo -e "  ${YELLOW}ella --backup${NC}          Erstellt .tar.gz inkl. Gehirn & Config"
+echo -e "  ${YELLOW}ella --restore <zip>${NC}   Teleportiert Ella auf diesen Pi"
+echo -e "  ${YELLOW}ella --migrate${NC}         Interaktiver Umzug auf einen neuen Pi"
+
+echo -e "\n${BOLD}⚙️  SYSTEM CONTROL:${NC}"
+echo -e "  ${CYAN}ella --start${NC}           Master Boot (Gateway + Proxy + Port-Kill)"
+echo -e "  ${CYAN}ella --stop${NC}            Deep Shutdown aller nativen Prozesse"
+echo -e "  ${CYAN}ella --restart${NC}         Schneller Warmstart"
+echo -e "  ${CYAN}ella --reset-full${NC}      Radikaler Nullpunkt & Log-Wipe"
+
+echo -e "\n${BOLD}🩺 DIAGNOSTICS & LOGS:${NC}"
+echo -e "  ${MAGENTA}ella --test-llm${NC}       Native Backend-Anbindung prüfen"
+echo -e "  ${MAGENTA}ella --tail${NC}           Live-View der lokalen Logfile"
+echo -e "  ${MAGENTA}ella --usage${NC}          CPU/RAM Check der KI-Prozesse"
+
+echo -e "\n${BOLD}🧠 BRAIN & MODELS:${NC}"
+echo -e "  ${WHITE}ella --context <val>${NC}   Setze Kontext (small=8k, large=32k)"
+echo -e "  ${WHITE}ella --models${NC}          Native Provider & Model Selector"
+echo -e "  ${WHITE}ella --sessions reset${NC}  Sitzungs-Speicher löschen"
+
+echo -e "${GREY}------------------------------------------------------------${NC}"
+echo -e "Tipp: Ella-Pi läuft am besten als systemd Service."

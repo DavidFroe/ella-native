@@ -1,0 +1,67 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+echo -e "${BLUE}${BOLD}🚀 ELLA-PI: THE MIGRATOR (v10.0)${NC}"
+echo -e "${GREY}------------------------------------------------------------${NC}"
+
+# 1. USER INPUT
+echo -n "📍 Ziel-IP Adresse des Raspberry Pi (z.B. 192.168.188.29): "
+read -r TARGET_IP
+if [ -z "$TARGET_IP" ]; then echo -e "${RED}Fehler: IP erforderlich.${NC}"; exit 1; fi
+
+echo -n "👤 Remote User auf dem Pi (Standard: ella): "
+read -r TARGET_USER
+TARGET_USER=${TARGET_USER:-ella}
+
+TARGET="$TARGET_USER@$TARGET_IP"
+
+# 2. SSH SETUP
+echo -e "\n🔑 1. Überprüfe SSH-Anbindung zu $TARGET..."
+if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$TARGET" exit 2>/dev/null; then
+    echo -e "${YELLOW}Keine passwortlose Verbindung gefunden. Übertrage SSH-Key...${NC}"
+    ssh-copy-id "$TARGET" || { echo -e "${RED}SSH-Key Transfer fehlgeschlagen.${NC}"; exit 1; }
+fi
+echo -e "${GREEN}✅ SSH-Verbindung steht.${NC}"
+
+# 3. PACKING MEMORY
+BKP_NAME="ella_migration_$(date +%s).tar.gz"
+echo -e "\n📦 2. Packe Gedächtnis (Memory-Transfer)..."
+cd "$HOME" || exit
+tar -czf "/tmp/$BKP_NAME" .config/openclaw-kibot/ .ella_thoughts 2>/dev/null
+echo -e "${GREEN}✅ Paket geschnürt (/tmp/$BKP_NAME)${NC}"
+
+# 4. TRANSFER
+echo -e "\n🛰️  3. Teleportiere Daten zum Pi..."
+scp "/tmp/$BKP_NAME" "$TARGET:/home/$TARGET_USER/" || { echo -e "${RED}Transfer fehlgeschlagen.${NC}"; exit 1; }
+echo -e "${GREEN}✅ Daten übertragen.${NC}"
+
+# 5. UNPACK & PERMISSIONS (Remote)
+echo -e "\n⚙️  4. Installiere Gedächtnis auf dem Pi..."
+ssh "$TARGET" "
+    cd /home/$TARGET_USER/
+    tar -xzf $BKP_NAME -C /home/$TARGET_USER/
+    sudo chown -R $TARGET_USER:$TARGET_USER /home/$TARGET_USER/.config/openclaw-kibot/
+    sudo chown -R $TARGET_USER:$TARGET_USER /home/$TARGET_USER/.ella_thoughts
+    rm $BKP_NAME
+    echo -e '✅ Entpackt & Berechtigungen gesetzt.'
+"
+
+# 6. SERVICE INIT (Remote)
+echo -e "\n🚀 5. Starte Ella-Pi Gateway remote..."
+ssh "$TARGET" "
+    # Suche openclaw binary
+    OC_BIN=\$(which openclaw 2>/dev/null || echo '/usr/local/bin/openclaw')
+    if [ -f \"\$OC_BIN\" ]; then
+        nohup \$OC_BIN gateway --force --bind 0.0.0.0 > /dev/null 2>&1 &
+        sleep 2
+        pgrep -f 'openclaw gateway' >/dev/null && echo '✅ Gateway läuft auf dem Pi.' || echo '❌ Gateway-Start fehlgeschlagen.'
+    else
+        echo '⚠️ openclaw nicht auf dem Pi gefunden! Bitte manuell installieren.'
+    fi
+"
+
+# 7. CLEANUP (Local)
+rm -f "/tmp/$BKP_NAME"
+echo -e "\n${GREY}------------------------------------------------------------${NC}"
+echo -e "✨ ${GREEN}${BOLD}MIGRATION ABGESCHLOSSEN!${NC}"
+echo -e "${CYAN}Ella ist nun auf den Raspberry Pi ($TARGET_IP) umgezogen.${NC}"

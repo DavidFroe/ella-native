@@ -1,0 +1,16 @@
+#!/bin/bash
+HOST_LOG="/tmp/ella_secret_console.log"
+SYSTEM_LOG="$HOME/.ella.log"
+
+echo -e "\033[0;36m📜 ELLA LOGS (Live View)\033[0m"
+echo "1. OpenClaw Live Output (oben)"
+echo "2. System Events (unten)"
+echo "-----------------------------------"
+
+# Wir zeigen beide Logs an (Multi-Tail ist cool, aber tail -f reicht erstmal für das wichtigste)
+if [ -f "$HOST_LOG" ]; then
+    tail -f "$HOST_LOG" "$SYSTEM_LOG"
+else
+    echo "Noch kein OpenClaw Output vorhanden. Zeige System Log..."
+    tail -f "$SYSTEM_LOG"
+fi

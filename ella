@@ -1,0 +1,147 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+COMMAND="$1"
+
+# 1. SMART DIRECT ASK (Nativ)
+if [[ "$COMMAND" != --* ]] && [ -n "$COMMAND" ]; then
+    case "$COMMAND" in
+        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|sessions|tele|models|context|test-llm|version)
+            COMMAND="--$COMMAND"
+            ;;
+        *)
+            ~/.local/bin/ella-ask "$*"
+            exit 0
+            ;;
+    esac
+fi
+
+shift
+PARAM="$*"
+
+case "$COMMAND" in
+    # --- SYSTEM INFO ---
+    --version|--v)
+        echo -e "${CYAN}ELLA v$ELLA_VERSION${NC} (Ella-Pi Bare Metal Edition)"
+        exit 0
+        ;;
+
+    # --- DIAGNOSTICS & STATUS ---
+    --health)   ~/ella/ella-health ;;
+    --status)   ~/ella/ella-status ;;
+    --test-llm) ~/ella/ella-test-llm ;;
+    
+    --logs|--tail)
+        echo -e "${BLUE}📋 ELLA LOGS (Tail)${NC}"
+        tail -f "$LOG_FILE"
+        ;;
+
+    --logs-clear)
+        echo -e "${BLUE}🧹 Clearing Logs...${NC}"
+        [ -f "$LOG_FILE" ] && mv "$LOG_FILE" "${LOG_FILE}.old"
+        > "$LOG_FILE"
+        echo -e "${GREEN}Host logs cleared. Archiv created.${NC}"
+        ;;
+
+    --usage)    top -b -n 1 | grep -E "openclaw|python3|ella" ;;
+    --top)      htop ;;
+
+    # --- SYSTEM CONTROL (Native) ---
+    --start)
+        echo -e "${BLUE}🚀 ELLA PI STARTUP SEQUENCE${NC}"
+        echo -e "${GREY}-----------------------------------------${NC}"
+        sync_tokens
+        export_gateway_token
+        
+        # Kill zombies
+        sudo fuser -k $GATEWAY_PORT/tcp 2>/dev/null || true
+        sudo fuser -k $OWLTRAIL_PORT/tcp 2>/dev/null || true
+        
+        # Start Gateway
+        echo -ne "  🚀 Launching Gateway...  "
+        nohup $OPENCLAW_BIN gateway --force --bind 0.0.0.0 > /dev/null 2>&1 &
+        sleep 2
+        check_gw_process && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAILED${NC}"
+        
+        # Start owlTrail (Proxy)
+        if [ -f "$OWLTRAIL_BIN" ]; then
+            echo -ne "  🛰️  Launching owlTrail... "
+            nohup python3 "$OWLTRAIL_BIN" > /dev/null 2>&1 &
+            sleep 1
+            pgrep -f "owlTrail.py" >/dev/null && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAILED${NC}"
+        fi
+
+        echo -e "${GREY}-----------------------------------------${NC}"
+        echo -e "${GREEN}${BOLD}🚀 Ella-Pi ist online.${NC}"
+        ;;
+
+    --stop)
+        echo -e "${YELLOW}🛑 Stopping Ella Components...${NC}"
+        pkill -f "openclaw gateway"
+        pkill -f "owlTrail.py"
+        echo -e "${GREEN}Cleaned up all processes.${NC}"
+        ;;
+
+    --restart)
+        $0 --stop
+        sleep 1
+        $0 --start
+        ;;
+
+    --reset-full)
+        echo -e "${RED}${BOLD}🚨 HARD RESET (Bare Metal)${NC}"
+        $0 --stop
+        $0 --logs-clear
+        $0 --start
+        ;;
+
+    # --- GLOBETROTTER BACKUP & RESTORE ---
+    --backup)
+        BKP_FILE="$HOME/ella_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
+        echo -e "${BLUE}📦 Erstelle Globetrotter Backup...${NC}"
+        cd "$HOME" || exit
+        tar -czf "$BKP_FILE" .config/openclaw-kibot/ .ella_thoughts 2>/dev/null
+        echo -e "${GREEN}✅ Backup gespeichert: $BKP_FILE${NC}"
+        ;;
+
+    --restore)
+        if [ -z "$PARAM" ]; then
+            echo -e "${RED}Fehler: Bitte gib eine Backup-Datei an.${NC}"
+            exit 1
+        fi
+        echo -e "${YELLOW}⚠️  RESTORE: Bestehende Konfiguration wird überschrieben!${NC}"
+        echo -n "Fortfahren? [j/N] "
+        read -r choice
+        if [[ "$choice" =~ ^[jJ]$ ]]; then
+            tar -xzf "$PARAM" -C "$HOME"
+            echo -e "${GREEN}✅ Restore abgeschlossen. Bitte 'ella --restart' ausführen.${NC}"
+        fi
+        ;;
+
+    --migrate)
+        chmod +x ~/ella/ella-migrate
+        ~/ella/ella-migrate
+        ;;
+
+    # --- BRAIN & CONTEXT ---
+    --context)  
+        chmod +x ~/ella/ella-context
+        ~/ella/ella-context "$PARAM"
+        ;;
+
+    --sessions)
+        if [ "$PARAM" == "reset" ]; then
+            echo -e "${RED}Resetting Sessions...${NC}"
+            rm -rf "$HOME/.config/openclaw-kibot/.openclaw/agents/main/sessions/*"
+            $0 --restart
+        else
+            $OPENCLAW_BIN sessions $PARAM
+        fi
+        ;;
+
+    --models)   bash ~/ella/ella-models $PARAM ;;
+    --tele)     bash ~/ella/ella-tele "$PARAM" ;;
+    --thought)  [ -n "$PARAM" ] && echo "$PARAM" > "$THOUGHT_FILE" || cat "$THOUGHT_FILE" ;;
+    
+    --help|*)   ~/ella/ella-help ;;
+esac

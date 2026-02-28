@@ -1,0 +1,25 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+OLD_LOG="${LOG_FILE}.old"
+
+echo -e "${BLUE}🧹 ELLA-PI LOG-WIPE (v10.0)${NC}"
+
+# 1. ARCHIVIERUNG (Native)
+if [ -f "$LOG_FILE" ]; then
+    cp "$LOG_FILE" "$OLD_LOG"
+    echo -e "   - Archiviert: $(basename "$LOG_FILE") -> $(basename "$OLD_LOG")"
+fi
+
+# 2. FLUSH LOGS
+> "$LOG_FILE"
+rm -f "$HOME/.ella_gw.log" "$HOME/.ella_owltrail.log"
+echo -e "   - Alle nativen Logs geleert.${NC}"
+
+# 3. RESTART (Optional if called manually)
+if [ "$1" != "--no-restart" ]; then
+    echo -e "${YELLOW}🔄 Starte Ella-Pi neu...${NC}"
+    /home/david/ella/ella --restart
+fi
+
+echo -e "\n✨ ${GREEN}Logs wurden geleert. System wurde gesäubert.${NC}"

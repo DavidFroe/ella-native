@@ -1,0 +1,50 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+VAL="$1"
+
+case "$VAL" in
+    small)  CTX=8192 ;;
+    medium) CTX=16384 ;;
+    large)  CTX=32768 ;;
+    [0-9]*) CTX=$VAL ;;
+    *)
+        echo -e "${RED}Usage: ella --context <small|medium|large|number>${NC}"
+        exit 1
+        ;;
+esac
+
+echo -e "${BLUE}⚙️ Setze Kontext-Fenster auf ${CTX} Token...${NC}"
+
+# Update JSON via Python
+python3 -c "
+import json, sys
+p = '$OPENCLAW_CONFIG_PATH'
+try:
+    with open(p, 'r') as f: d = json.load(f)
+    
+    # 1. Update in agents.defaults (Global fallback)
+    if 'agents' not in d: d['agents'] = {}
+    if 'defaults' not in d['agents']: d['agents']['defaults'] = {}
+    d['agents']['defaults']['contextWindow'] = $CTX
+    
+    # 2. Update specific models (custom-127-0-0-1-8081/lm-1)
+    providers = d.get('models', {}).get('providers', {})
+    for provider in providers.values():
+        for model in provider.get('models', []):
+            model['contextWindow'] = $CTX
+            model['maxTokens'] = $CTX
+            
+    with open(p, 'w') as f: json.dump(d, f, indent=4)
+    print('✅ openclaw.json aktualisiert.')
+except Exception as e:
+    print(f'❌ Fehler: {e}')
+    sys.exit(1)
+"
+
+if [ $? -eq 0 ]; then
+    echo -e "${YELLOW}🔄 Starte Ella-Pi neu, um Änderungen zu übernehmen...${NC}"
+    # Native Restart
+    /home/david/ella/ella --restart
+fi
+

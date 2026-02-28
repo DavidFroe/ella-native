@@ -1,0 +1,164 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+COMMAND="$1"
+PARAM2="$2"
+
+require_container
+
+# Helper: Run openclaw command (inside or outside container)
+oc_run() {
+    if is_inside; then
+        eval "$@"
+    else
+        podman exec --user david "$CONTAINER_NAME" bash -lc "$*"
+    fi
+}
+
+# Alle verfügbaren Models auflisten (nur Modellnamen, ohne Header)
+get_model_list() {
+    oc_run "openclaw models list --all 2>/dev/null" \
+        | sed -e 's/\x1b\[[0-9;]*m//g' \
+        | grep -v '^\s*$' \
+        | tail -n +2 \
+        | awk '{print $1}'
+}
+
+# Aktuelles Model = das mit "default" Tag
+get_current_model() {
+    oc_run "openclaw models list --all 2>/dev/null" \
+        | sed -e 's/\x1b\[[0-9;]*m//g' \
+        | grep "default" \
+        | awk '{print $1}'
+}
+
+# Vollständige Zeile für Anzeige
+get_model_details() {
+    oc_run "openclaw models list --all 2>/dev/null" \
+        | sed -e 's/\x1b\[[0-9;]*m//g' \
+        | grep -v '^\s*$' \
+        | tail -n +2
+}
+
+# Alle verfügbaren Anbieter (Kategorien) auflisten
+get_categories() {
+    get_model_list | cut -d'/' -f1 | sort -u
+}
+
+# Models einer bestimmten Kategorie auflisten
+get_models_by_category() {
+    local CAT="$1"
+    get_model_details | grep -i "^$CAT/"
+}
+
+list_models() {
+    local CAT="$1"
+
+    if [ -z "$CAT" ]; then
+        echo -e "${BLUE}🤖 MODELL-KATEGORIEN:${NC}"
+        echo -e "${GREY}-----------------------------------------${NC}"
+        get_categories | while read -r provider; do
+            count=$(get_model_list | grep -c "^$provider/")
+            echo -e "  ${CYAN}$provider${NC} ($count Modelle)"
+        done
+        echo -e "${GREY}-----------------------------------------${NC}"
+        CURRENT=$(get_current_model)
+        echo -e "  Aktiv: ${YELLOW}${CURRENT:-Unbekannt}${NC}"
+        echo -e "${GREY}-----------------------------------------${NC}"
+        echo -e "${CYAN}Nutze: ella --models list <kategorie>  (z.B. ella --models list openai)${NC}"
+        echo -e "${CYAN}Wechseln: ella --models set <name>${NC}"
+        return
+    fi
+
+    echo -e "${BLUE}🤖 MODELLE IN KATEGORIE: ${BOLD}$CAT${NC}"
+    echo -e "${GREY}-----------------------------------------${NC}"
+    
+    local i=1
+    get_models_by_category "$CAT" | while IFS= read -r line; do
+        MODEL_NAME=$(echo "$line" | awk '{print $1}')
+        TAGS=$(echo "$line" | awk '{print $NF}')
+        [ -z "$MODEL_NAME" ] && continue
+        
+        if echo "$TAGS" | grep -q "default"; then
+            echo -e "  ${GREEN}${BOLD}★ $MODEL_NAME  (AKTIV)${NC}"
+        elif echo "$TAGS" | grep -q "missing"; then
+            echo -e "  ${RED}  $MODEL_NAME  ⚠ MISSING${NC}"
+        else
+            echo -e "  ${CYAN}•${NC} $MODEL_NAME"
+        fi
+        i=$((i + 1))
+    done
+    
+    echo -e "${GREY}-----------------------------------------${NC}"
+    echo -e "${CYAN}Wechseln: ella --models set <name>${NC}"
+}
+
+# Model per Nummer oder Name setzen
+set_model() {
+    local TARGET="$1"
+    
+    if [ -z "$TARGET" ]; then
+        echo -e "${RED}❌ Modellname fehlt!${NC}"
+        echo -e "Nutze: ${CYAN}ella --models set <name>${NC}"
+        return 1
+    fi
+    
+    # Da wir nun Kategorien haben, ist Nummern-Auswahl schwierig. 
+    # Wir unterstützen primär den Namen oder Pfad.
+    MODEL_NAME="$TARGET"
+    
+    echo -e "${BLUE}🔄 Wechsle zu: ${BOLD}$MODEL_NAME${NC}"
+    
+    # Methode 1: openclaw models set
+    RESULT=$(oc_run "openclaw models set '$MODEL_NAME' 2>&1")
+    RET=$?
+    
+    if [ $RET -ne 0 ] || echo "$RESULT" | grep -qi "error\|unknown"; then
+        # Methode 2: Config-Datei korrekt editieren
+        echo -e "${YELLOW}⚙️  Direkte Config-Änderung (agents.defaults.model.primary)...${NC}"
+        RESULT=$(oc_run "python3 -c \"
+import json
+conf = '/home/david/.openclaw/openclaw.json'
+with open(conf) as f: data = json.load(f)
+data.setdefault('agents', {}).setdefault('defaults', {}).setdefault('model', {})['primary'] = '$MODEL_NAME'
+data.get('agents', {}).get('defaults', {}).get('model', {}).pop('fallbacks', None)
+with open(conf, 'w') as f: json.dump(data, f, indent=2)
+print('OK')
+\" 2>&1")
+        RET=$?
+    fi
+    
+    if [ $RET -eq 0 ] && ! echo "$RESULT" | grep -qi "error"; then
+        echo -e "${GREEN}✅ Model gewechselt: ${BOLD}$MODEL_NAME${NC}"
+        echo -e "${GREY}Tipp: ella --sessions reset falls der Agent nicht reagiert.${NC}"
+    else
+        echo -e "${RED}❌ Fehler: $RESULT${NC}"
+        echo -e "${YELLOW}Tipp: Versuche im Container: openclaw configure${NC}"
+    fi
+}
+
+# --- MAIN ---
+case "$COMMAND" in
+    ""|"list")
+        list_models "$PARAM2"
+        ;;
+    "set")
+        set_model "$PARAM2"
+        ;;
+    "current"|"active")
+        CURRENT=$(get_current_model)
+        echo -e "🤖 Aktives Model: ${GREEN}${BOLD}${CURRENT:-Unbekannt}${NC}"
+        ;;
+    "fix"|"doctor")
+        echo -e "${YELLOW}🔧 Repariere Config...${NC}"
+        oc_run "openclaw doctor --fix"
+        ;;
+    *)
+        # Falls ein Argument direkt kommt (z.B. ella --models openai/gpt-4)
+        if get_model_list | grep -qx "$COMMAND"; then
+            set_model "$COMMAND"
+        else
+            list_models "$COMMAND"
+        fi
+        ;;
+esac

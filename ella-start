@@ -1,0 +1,63 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+# 0. PRE-FLIGHT CHECKS
+sync_tokens
+
+echo -e "🚀 ${BLUE}Starte ELLA System (v${ELLA_VERSION} FinalFix)...${NC}"
+
+
+# 0. PREPARE IPC (Host-Seite)
+if [ ! -d "$ELLA_IPC_DIR_HOST" ]; then
+    mkdir -p "$ELLA_IPC_DIR_HOST"
+fi
+chmod 777 "$ELLA_IPC_DIR_HOST"
+
+# 1. ZOMBIE KILLER (Host-Seite)
+# Wir killen erst mal alles was nach Gateway oder Container aussieht, um Port-Locks zu verhindern.
+# (Optional: distrobox stop, falls es hängt)
+if distrobox list | grep -q "$CONTAINER_NAME.*running"; then
+     echo -e "📦 ${YELLOW}Container läuft bereits. Prüfe auf Zombies...${NC}"
+     # Kill Gateway im Container
+     podman exec "$CONTAINER_NAME" pkill -f "openclaw gateway" 2>/dev/null
+     sleep 1
+fi
+
+# 2. CLEAN START (Host-Seite)
+# Wir starten den Container OHNE jegliche Flags. Nur 'podman start'.
+# Das umgeht den 'distrobox enter' Segfault.
+echo -e "📦 ${BLUE}Starte Container (clean)...${NC}"
+
+if ! podman start "$CONTAINER_NAME" >/dev/null 2>&1; then
+    # Fallback: Wenn 'start' fehlschlägt, ist er vielleicht gar nicht created?
+    # Dann rebuilden wir.
+    echo -e "${RED}❌ Fehler beim Start (podman start).${NC}"
+    if rebuild_container; then
+        echo -e "🔄 Versuche erneuten Start nach Rebuild..."
+        podman start "$CONTAINER_NAME"
+    else
+        echo -e "${RED}Start endgültig gescheitert.${NC}"
+        exit 1
+    fi
+fi
+
+# 3. DNS INJECTION (Post-Start)
+# Wir versuchen es. Wenn es fehlschlägt (Read-only), ist das OK -> Host DNS wird genutzt.
+echo -e "💉 ${BLUE}Setze DNS (8.8.8.8)...${NC}"
+if podman exec -u 0 "$CONTAINER_NAME" bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf" 2>/dev/null; then
+    echo -e "✅ DNS Konfiguration aktualisiert."
+else
+    echo -e "${YELLOW}⚠️  DNS konnte nicht gesetzt werden (Read-only / Permission). Nutze Host-DNS.${NC}"
+fi
+
+# 4. START GATEWAY (via ella-gw-start)
+# Das Skript nutzt 'podman exec -d', also sauber entkoppelt.
+echo -e "🛰️  Starte OpenClaw Gateway..."
+~/.local/bin/ella-gw-start
+
+# 5. FINAL CHECK
+if check_gw_http; then
+    echo -e "\n✅ ${GREEN}ELLA ist ONLINE.${NC}"
+else
+    echo -e "\n❌ ${RED}Gateway startet nicht. Prüfe 'ella logs'.${NC}"
+fi

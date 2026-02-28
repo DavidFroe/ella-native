@@ -1,0 +1,135 @@
+#!/bin/bash
+# ================================================================
+# ================================================================
+# ELLA CORE LIBRARY - v10.0 (Ella-Pi Bare Metal Edition)
+# ================================================================
+export ELLA_VERSION="10.0"
+
+# --- NATIVE KONFIGURATION (Raspberry Pi / Linux) ---
+export THOUGHT_FILE="$HOME/.ella_thoughts"
+export LOG_FILE="$HOME/.ella.log"
+export OPENCLAW_JSON_PATH="$HOME/.config/openclaw-kibot/.openclaw/openclaw.json"
+export CONFIG_FILE="$OPENCLAW_JSON_PATH"
+export OPENCLAW_CONFIG_PATH="$OPENCLAW_JSON_PATH"
+export GATEWAY_PORT=18789
+export OWLTRAIL_PORT=8081
+
+# Automatische Pfad-Erkennung für native Binaries
+export OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "/usr/local/bin/openclaw")
+export OWLTRAIL_BIN="$HOME/owlTrail/owlTrail.py"
+
+# --- PERMISSION & TOKEN INITIALIZATION ---
+fix_permissions() {
+    # 1. Log File
+    if [ ! -f "$LOG_FILE" ]; then touch "$LOG_FILE" 2>/dev/null; fi
+    
+    # 2. Workspace (aus Config extrahieren)
+    WS_DIR=$(grep -oP '"workspace":\s*"\K[^"]+' "$OPENCLAW_CONFIG_PATH" 2>/dev/null)
+    
+    TARGETS=("$LOG_FILE" "$HOME/.config/openclaw-kibot/")
+    [ -n "$WS_DIR" ] && TARGETS+=("$WS_DIR")
+
+    for target in "${TARGETS[@]}"; do
+        if [ -e "$target" ]; then
+            # Ensure my user owns it
+            sudo chown -R $USER:$USER "$target" 2>/dev/null || true
+            if [ -d "$target" ]; then
+                chmod -R 775 "$target" 2>/dev/null || true
+            else
+                chmod 664 "$target" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
+export_gateway_token() {
+    export OPENCLAW_GATEWAY_TOKEN=$(get_token)
+}
+
+
+sync_tokens() {
+    # Wir synchronisieren die Kibot-Config
+    if [ -f "$OPENCLAW_JSON_PATH" ]; then
+        python3 -c "
+import json, os
+p = '$OPENCLAW_JSON_PATH'
+try:
+    with open(p, 'r') as f: d = json.load(f)
+    a = d.get('gateway', {}).get('auth', {}).get('token')
+    if a:
+        if 'gateway' not in d: d['gateway'] = {}
+        if 'remote' not in d['gateway']: d['gateway']['remote'] = {}
+        if d['gateway']['remote'].get('token') != a:
+            d['gateway']['remote']['token'] = a
+            with open(p, 'w') as f: json.dump(d, f, indent=4)
+except Exception as e: print(f'Sync error: {e}')
+"
+    fi
+}
+
+
+
+
+
+
+# --- FARBEN ---
+export GREEN='\033[0;32m'
+export RED='\033[0;31m'
+export BLUE='\033[0;34m'
+export YELLOW='\033[0;33m'
+export CYAN='\033[0;36m'
+export MAGENTA='\033[0;35m'
+export GREY='\033[0;90m'
+export WHITE='\033[1;37m'
+export BOLD='\033[1m'
+export NC='\033[0m'
+
+# --- LOGGING SYSTEM ---
+# Schreibt immer in das Logfile UND auf die Konsole
+log_info() {
+    MSG="[INFO] $1"
+    echo -e "${GREEN}ℹ️  $1${NC}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $MSG" >> "$LOG_FILE"
+}
+
+log_error() {
+    MSG="[ERROR] $1"
+    echo -e "${RED}❌ $1${NC}" >&2
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $MSG" >> "$LOG_FILE"
+}
+
+# Zeigt Nachrichten nur, wenn --verbose aktiv ist
+log_debug() {
+    if [ "$ELLA_VERBOSE" == "true" ]; then
+        MSG="[DEBUG] $1"
+        echo -e "${MAGENTA}🐛 $1${NC}"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $MSG" >> "$LOG_FILE"
+    fi
+}
+
+# --- NATIVE HELFER ---
+get_token() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "NO_TOKEN"
+        return 1
+    fi
+    TOKEN=$(grep -oP '"token":\s*"\K[^"]+' "$CONFIG_FILE" | head -n 1)
+    echo "${TOKEN:-NO_TOKEN}"
+}
+
+check_gw_process() {
+    pgrep -f "openclaw gateway|openclaw-gateway" > /dev/null
+    return $?
+}
+
+check_gw_http() {
+    TOKEN=$(get_token)
+    URL="http://127.0.0.1:$GATEWAY_PORT/?token=$TOKEN"
+    CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "$URL" 2>/dev/null)
+    [ "$CODE" == "200" ]
+}
+
+# --- INITIALIZATION ---
+# Diese Routinen laufen bei jedem 'source ella-core'
+fix_permissions
+export_gateway_token

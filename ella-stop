@@ -1,0 +1,31 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+# 1. ERST PRÜFEN: Läuft der Container überhaupt?
+if ! podman ps --format '{{.Names}}' | grep -q "$CONTAINER_NAME"; then
+    echo -e "${YELLOW}💤 Ella schläft bereits. (Nichts zu tun)${NC}"
+    exit 0
+fi
+
+echo -e "${RED}🛑 Fahre System herunter...${NC}"
+
+# 2. Prozesse im Container killen (sanft)
+podman exec "$CONTAINER_NAME" pkill -f openclaw 2>/dev/null
+
+# 3. Die komplette Distrobox-Session stoppen (hart)
+# Das -Y erzwingt das Ende ohne Nachfragen
+distrobox stop -Y "$CONTAINER_NAME" >/dev/null 2>&1
+
+# 4. Warte auf Port-Freigabe (max 10s)
+echo -n "⏳ Warte auf Port-Freigabe ($GATEWAY_PORT)..."
+COUNT=0
+while lsof -i ":$GATEWAY_PORT" >/dev/null 2>&1; do
+    echo -n "."
+    sleep 1
+    COUNT=$((COUNT+1))
+    if [ $COUNT -ge 10 ]; then
+        echo -e "\r⚠️  Timeout wartend auf Port-Freigabe. Fahre fort...      "
+        break
+    fi
+done
+echo -e "\r✅ System vollständig bereinigt und angehalten.      "

@@ -1,0 +1,22 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+QUERY="$*"
+if [ -z "$QUERY" ]; then
+    echo "Usage: ella <fragetext>"
+    exit 1
+fi
+
+# 1. NATIVE HEALTH CHECK
+if ! check_gw_http; then
+    echo -e "${YELLOW}⚠️  Gateway offline. Starte Ella-Pi...${NC}"
+    ~/ella/ella-gw-start || exit 1
+fi
+
+echo -e "${CYAN}🧠 ELLA denkt nach...${NC}"
+
+# 2. NATIVE EXECUTION
+export OPENCLAW_GATEWAY_TOKEN="$OPENCLAW_GATEWAY_TOKEN"
+export OPENCLAW_CONFIG_PATH="$OPENCLAW_CONFIG_PATH"
+
+$OPENCLAW_BIN agent --agent main --message "$QUERY"

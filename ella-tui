@@ -1,0 +1,20 @@
+#!/bin/bash
+source /home/david/ella/ella-core
+
+echo -e "${CYAN}💬 Starte ELLA TUI (Text Interface)...${NC}"
+echo -e "${YELLOW}(Drücke Strg+C oder tippe 'exit' zum Beenden)${NC}"
+echo "------------------------------------------------"
+
+# Fall 1: Wir sind schon drin (Container-Shell)
+# Fall 1: Wir sind schon drin (Container-Shell)
+if is_inside; then
+    openclaw tui
+    exit 0
+fi
+
+# Fall 2: Wir sind draußen -> Container Check
+require_container
+
+# Start via Distrobox
+# Start via Distrobox
+distrobox enter "$CONTAINER_NAME" -- openclaw tui

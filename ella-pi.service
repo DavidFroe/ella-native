@@ -1,0 +1,15 @@
+[Unit]
+Description=ELLA-PI Bare Metal Service (v10.0)
+After=network.target
+
+[Service]
+Type=simple
+User=david
+WorkingDirectory=/home/david/ella
+ExecStart=/home/david/ella/ella --start
+ExecStop=/home/david/ella/ella --stop
+RemainAfterExit=yes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
