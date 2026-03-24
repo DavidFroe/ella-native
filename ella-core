@@ -16,7 +16,9 @@ export OWLTRAIL_PORT=8081
 
 # Automatische Pfad-Erkennung für native Binaries
 export OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "/usr/local/bin/openclaw")
-export OWLTRAIL_BIN="$HOME/owlTrail/owlTrail.py"
+export OWLTRAIL_DIR="$(dirname "$BASE_DIR")/owltrail"
+export OWLTRAIL_BIN="$OWLTRAIL_DIR/owltrail_server.py"
+export OWLTRAIL_CLI="$OWLTRAIL_DIR/owltrail"
 
 # --- PERMISSION & TOKEN INITIALIZATION ---
 fix_permissions() {
@@ -48,23 +50,62 @@ export_gateway_token() {
 
 
 sync_tokens() {
-    # Wir synchronisieren die Kibot-Config
-    if [ -f "$OPENCLAW_JSON_PATH" ]; then
-        python3 -c "
+    # Gateway Config = Quelle der Wahrheit für Tokens
+    GW_CONFIG="$HOME/.openclaw/openclaw.json"
+    KIBOT_CONFIG="$OPENCLAW_JSON_PATH"
+    AUTH_FILE="$HOME/.openclaw/agents/main/agent/auth-profiles.json"
+
+    python3 -c "
 import json, os
-p = '$OPENCLAW_JSON_PATH'
-try:
-    with open(p, 'r') as f: d = json.load(f)
-    a = d.get('gateway', {}).get('auth', {}).get('token')
-    if a:
-        if 'gateway' not in d: d['gateway'] = {}
-        if 'remote' not in d['gateway']: d['gateway']['remote'] = {}
-        if d['gateway']['remote'].get('token') != a:
-            d['gateway']['remote']['token'] = a
-            with open(p, 'w') as f: json.dump(d, f, indent=4)
-except Exception as e: print(f'Sync error: {e}')
-"
-    fi
+
+gw_path = '$GW_CONFIG'
+kibot_path = '$KIBOT_CONFIG'
+auth_path = '$AUTH_FILE'
+
+# 1. Token von Gateway-Config lesen und in Kibot-Config synchronisieren
+gw_token = None
+if os.path.exists(gw_path):
+    with open(gw_path, 'r') as f: gw = json.load(f)
+    gw_token = gw.get('gateway', {}).get('auth', {}).get('token')
+
+    # owltrail Provider in Gateway-Config sicherstellen (mit api: openai!)
+    if 'models' not in gw: gw['models'] = {}
+    if 'providers' not in gw['models']: gw['models']['providers'] = {}
+    prov = gw['models']['providers'].get('custom-localhost-8081', {})
+    if not prov or 'api' not in prov:
+        gw['models']['providers']['custom-localhost-8081'] = {
+            'api': 'openai-completions',
+            'baseUrl': 'http://localhost:8081/v1',
+            'models': prov.get('models', [{'id': 'auto', 'name': 'auto'}])
+        }
+        if 'agents' not in gw: gw['agents'] = {}
+        if 'defaults' not in gw['agents']: gw['agents']['defaults'] = {}
+        gw['agents']['defaults']['model'] = {'primary': 'custom-localhost-8081/auto'}
+        if 'models' not in gw['agents']['defaults']:
+            gw['agents']['defaults']['models'] = {'custom-localhost-8081/auto': {}}
+        with open(gw_path, 'w') as f: json.dump(gw, f, indent=4)
+
+if gw_token and os.path.exists(kibot_path):
+    with open(kibot_path, 'r') as f: kb = json.load(f)
+    changed = False
+    if 'gateway' not in kb: kb['gateway'] = {}
+    for key in ['auth', 'remote']:
+        if key not in kb['gateway']: kb['gateway'][key] = {}
+        if kb['gateway'][key].get('token') != gw_token:
+            kb['gateway'][key]['token'] = gw_token
+            changed = True
+    if changed:
+        with open(kibot_path, 'w') as f: json.dump(kb, f, indent=4)
+
+# 2. owltrail Auth-Key sicherstellen
+if os.path.exists(auth_path):
+    with open(auth_path, 'r') as f: auth = json.load(f)
+    if 'custom-localhost-8081:default' not in auth.get('profiles', {}):
+        auth['profiles']['custom-localhost-8081:default'] = {
+            'type': 'api_key', 'provider': 'custom-localhost-8081', 'key': 'owltrail-local'
+        }
+        with open(auth_path, 'w') as f: json.dump(auth, f, indent=4)
+" 2>/dev/null
 }
 
 
@@ -109,7 +150,7 @@ log_debug() {
 
 # --- NATIVE HELFER ---
 get_token() {
-    if [ ! -f "$CONFIG_FILE" ]; then
+    if [ -z "$CONFIG_FILE" ] || [ ! -f "$CONFIG_FILE" ]; then
         echo "NO_TOKEN"
         return 1
     fi
@@ -124,7 +165,7 @@ check_gw_process() {
 
 check_gw_http() {
     TOKEN=$(get_token)
-    URL="http://127.0.0.1:$GATEWAY_PORT/?token=$TOKEN"
+    URL="http://localhost:$GATEWAY_PORT/?token=$TOKEN"
     CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "$URL" 2>/dev/null)
     [ "$CODE" == "200" ]
 }

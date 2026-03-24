@@ -1,17 +1,28 @@
-#!/bin/bash
-source /home/david/ella/ella-core
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source $BASE_DIR/ella-core
 
 COMMAND="$1"
 
 # 1. SMART DIRECT ASK (Nativ)
 if [[ "$COMMAND" != --* ]] && [ -n "$COMMAND" ]; then
     case "$COMMAND" in
-        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|sessions|tele|models|context|test-llm|version)
+        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|sessions|tele|models|context|timeout|test-llm|version|channel|whatsapp|wa|telegram|tg|owltrail|openclaw|gateway|repair|quiteque|qq)
             COMMAND="--$COMMAND"
             ;;
         *)
-            ~/.local/bin/ella-ask "$*"
-            exit 0
+            # Nur als LLM-Prompt wenn das Argument Leerzeichen/Interpunktion enthält (Gänsefüßchen)
+            # oder wenn mehrere separate Argumente gegeben wurden
+            if [[ "$COMMAND" =~ [[:space:]] ]] || [ $# -gt 1 ]; then
+                # Enthält Leerzeichen oder mehrere Argumente → echte Frage
+                $BASE_DIR/ella-ask "$*"
+                exit 0
+            else
+                # Ein Wort ohne Leerzeichen, kein bekannter Befehl → Error
+                echo -e "${RED}❌ Unbekannter Befehl: $1${NC}"
+                echo -e "   Meintest du einen dieser Befehle? ${CYAN}ella --help${NC}"
+                echo -e "   Für eine Frage: ${GREEN}ella \"deine Frage hier\"${NC}"
+                exit 1
+            fi
             ;;
     esac
 fi
@@ -27,9 +38,9 @@ case "$COMMAND" in
         ;;
 
     # --- DIAGNOSTICS & STATUS ---
-    --health)   ~/ella/ella-health ;;
-    --status)   ~/ella/ella-status ;;
-    --test-llm) ~/ella/ella-test-llm ;;
+    --health)   $BASE_DIR/ella-health ;;
+    --status)   $BASE_DIR/ella-status ;;
+    --test-llm) $BASE_DIR/ella-test-llm ;;
     
     --logs|--tail)
         echo -e "${BLUE}📋 ELLA LOGS (Tail)${NC}"
@@ -46,6 +57,10 @@ case "$COMMAND" in
     --usage)    top -b -n 1 | grep -E "openclaw|python3|ella" ;;
     --top)      htop ;;
 
+    --tui|--chat)
+        bash $BASE_DIR/ella-tui $PARAM
+        ;;
+
     # --- SYSTEM CONTROL (Native) ---
     --start)
         echo -e "${BLUE}🚀 ELLA PI STARTUP SEQUENCE${NC}"
@@ -53,22 +68,66 @@ case "$COMMAND" in
         sync_tokens
         export_gateway_token
         
-        # Kill zombies
-        sudo fuser -k $GATEWAY_PORT/tcp 2>/dev/null || true
-        sudo fuser -k $OWLTRAIL_PORT/tcp 2>/dev/null || true
+        # Kill zombies on Gateway port only (not owltrail!)
+        sudo fuser -k $GATEWAY_PORT/tcp > /dev/null 2>&1 || true
         
-        # Start Gateway
+        # Start Gateway via OpenClaw (systemd)
         echo -ne "  🚀 Launching Gateway...  "
-        nohup $OPENCLAW_BIN gateway --force --bind 0.0.0.0 > /dev/null 2>&1 &
-        sleep 2
-        check_gw_process && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAILED${NC}"
-        
-        # Start owlTrail (Proxy)
-        if [ -f "$OWLTRAIL_BIN" ]; then
-            echo -ne "  🛰️  Launching owlTrail... "
-            nohup python3 "$OWLTRAIL_BIN" > /dev/null 2>&1 &
+        GW_LOG=$(mktemp)
+        $OPENCLAW_BIN gateway start > "$GW_LOG" 2>&1
+        # Gateway braucht nach systemd-restart etwas bis HTTP ready ist
+        GW_OK=false
+        for i in $(seq 1 8); do
+            if check_gw_http; then
+                GW_OK=true
+                break
+            fi
             sleep 1
-            pgrep -f "owlTrail.py" >/dev/null && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAILED${NC}"
+            echo -ne "."
+        done
+        if $GW_OK; then
+            echo -e " ${GREEN}OK${NC}"
+        elif check_gw_process; then
+            echo -e " ${YELLOW}STARTING${NC} (Prozess läuft, HTTP noch nicht ready)"
+        else
+            echo -e " ${RED}FAILED${NC}"
+            if [ -s "$GW_LOG" ]; then
+                echo -e "${GREY}$(cat "$GW_LOG")${NC}"
+            fi
+        fi
+        rm -f "$GW_LOG"
+        
+        # Start owlAPI
+        echo -ne "  🦉 Launching owlAPI...    "
+        if [ -x "$HOME/.local/bin/owl" ]; then
+            $HOME/.local/bin/owl server start 2>/dev/null | tail -1
+        else
+            echo -e "${YELLOW}SKIP (nicht installiert)${NC}"
+        fi
+
+        # Start QuiteQue
+        echo -ne "  🔀 Launching QuiteQue...  "
+        if [ -x "$HOME/apps/QuiteQue/qq" ]; then
+            $HOME/apps/QuiteQue/qq start 2>/dev/null | tail -1
+        else
+            echo -e "${YELLOW}SKIP (nicht installiert)${NC}"
+        fi
+
+        # Start owltrail (via CLI)
+        echo -ne "  🦉 Launching owltrail... "
+        if [ -x "$OWLTRAIL_CLI" ]; then
+            $OWLTRAIL_CLI server start 2>/dev/null | tail -1
+        elif [ -f "$OWLTRAIL_BIN" ]; then
+            cd "$OWLTRAIL_DIR" && nohup ./venv/bin/python3 owltrail_server.py > /dev/null 2>&1 &
+            sleep 1
+            pgrep -f "owltrail_server" >/dev/null && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAILED${NC}"
+        else
+            echo -e "${YELLOW}SKIP (nicht installiert)${NC}"
+        fi
+
+        # Model-Check im Hintergrund (frische Status-Daten)
+        if [ -x "$HOME/.local/bin/owl" ]; then
+            $HOME/.local/bin/owl check-all > /dev/null 2>&1 &
         fi
 
         echo -e "${GREY}-----------------------------------------${NC}"
@@ -77,8 +136,18 @@ case "$COMMAND" in
 
     --stop)
         echo -e "${YELLOW}🛑 Stopping Ella Components...${NC}"
-        pkill -f "openclaw gateway"
-        pkill -f "owlTrail.py"
+        $OPENCLAW_BIN gateway stop > /dev/null 2>&1 || pkill -f "openclaw gateway" 2>/dev/null || true
+        if [ -x "$OWLTRAIL_CLI" ]; then
+            $OWLTRAIL_CLI server stop 2>/dev/null
+        else
+            pkill -f "owltrail_server" 2>/dev/null || true
+        fi
+        if [ -x "$HOME/apps/QuiteQue/qq" ]; then
+            $HOME/apps/QuiteQue/qq stop 2>/dev/null | tail -1 || true
+        fi
+        if [ -x "$HOME/.local/bin/owl" ]; then
+            $HOME/.local/bin/owl server stop 2>/dev/null | tail -1 || true
+        fi
         echo -e "${GREEN}Cleaned up all processes.${NC}"
         ;;
 
@@ -88,11 +157,21 @@ case "$COMMAND" in
         $0 --start
         ;;
 
+    # --- GATEWAY (Shortcut → openclaw) ---
+    --gateway)
+        bash $BASE_DIR/ella-openclaw $PARAM
+        ;;
+
     --reset-full)
         echo -e "${RED}${BOLD}🚨 HARD RESET (Bare Metal)${NC}"
         $0 --stop
         $0 --logs-clear
         $0 --start
+        ;;
+
+    --repair)
+        chmod +x $BASE_DIR/ella-repair
+        $BASE_DIR/ella-repair
         ;;
 
     # --- GLOBETROTTER BACKUP & RESTORE ---
@@ -119,29 +198,73 @@ case "$COMMAND" in
         ;;
 
     --migrate)
-        chmod +x ~/ella/ella-migrate
-        ~/ella/ella-migrate
+        chmod +x $BASE_DIR/ella-migrate
+        $BASE_DIR/ella-migrate
         ;;
 
-    # --- BRAIN & CONTEXT ---
-    --context)  
-        chmod +x ~/ella/ella-context
-        ~/ella/ella-context "$PARAM"
+    # --- OPENCLAW ADMIN ---
+    --openclaw)
+        bash $BASE_DIR/ella-openclaw $PARAM
         ;;
 
-    --sessions)
-        if [ "$PARAM" == "reset" ]; then
-            echo -e "${RED}Resetting Sessions...${NC}"
-            rm -rf "$HOME/.config/openclaw-kibot/.openclaw/agents/main/sessions/*"
-            $0 --restart
+    # --- Shortcuts (Rückwärtskompatibilität) ---
+    --sessions) bash $BASE_DIR/ella-openclaw sessions $PARAM ;;
+    --context)  bash $BASE_DIR/ella-owltrail context $PARAM ;;
+    --timeout)  bash $BASE_DIR/ella-owltrail timeout $PARAM ;;
+    --models)   bash $BASE_DIR/ella-owltrail models ;;
+    --tele)     bash $BASE_DIR/ella-tele "$PARAM" ;;
+    --thought)  [ -n "$PARAM" ] && echo "$PARAM" > "$THOUGHT_FILE" || cat "$THOUGHT_FILE" ;;
+    
+    # --- OWLTRAIL PROXY ---
+    --owltrail)
+        bash $BASE_DIR/ella-owltrail $PARAM
+        ;;
+
+    # --- QUITEQUE MIDDLEWARE ---
+    --quiteque|--qq)
+        QQ_CMD=$(echo "$PARAM" | awk '{print $1}')
+        QQ_ARGS=$(echo "$PARAM" | awk '{$1=""; print $0}' | sed 's/^ //')
+        if [ -x "$HOME/apps/QuiteQue/qq" ]; then
+            $HOME/apps/QuiteQue/qq ${QQ_CMD:-help} $QQ_ARGS
         else
-            $OPENCLAW_BIN sessions $PARAM
+            echo -e "${RED}❌ QuiteQue nicht installiert. Installiere mit: cd ~/apps/QuiteQue && ./install.sh${NC}"
         fi
         ;;
 
-    --models)   bash ~/ella/ella-models $PARAM ;;
-    --tele)     bash ~/ella/ella-tele "$PARAM" ;;
-    --thought)  [ -n "$PARAM" ] && echo "$PARAM" > "$THOUGHT_FILE" || cat "$THOUGHT_FILE" ;;
+    # --- owltrail (Alias ella llm → ella owltrail, veraltet) ---
+    --llm)
+        echo -e "${YELLOW}⚠️  'ella llm' ist veraltet → bitte 'ella owltrail' verwenden${NC}"
+        bash $BASE_DIR/ella-owltrail $PARAM
+        ;;
+
+    # --- EXTERNAL CHANNELS (OpenClaw) ---
+    --channel)
+        bash $BASE_DIR/ella-channel "$PARAM"
+        ;;
+    --whatsapp|--wa)
+        cmd_part=$(echo "$PARAM" | awk '{print $1}')
+        rest_part=$(echo "$PARAM" | cut -d' ' -f2-)
+        if [ -n "$cmd_part" ] && [[ "$cmd_part" != auth* ]] && [[ "$cmd_part" != on* ]] && [[ "$cmd_part" != off* ]] && [[ "$cmd_part" != status* ]]; then
+            # Chat-Nachricht: ella whatsapp "text" → über OpenClaw an WhatsApp
+            echo -e "${CYAN}📱 Sende über WhatsApp...${NC}"
+            sync_tokens
+            $OPENCLAW_BIN agent --agent main --channel whatsapp --deliver --message "$PARAM"
+        else
+            bash $BASE_DIR/ella-channel "$cmd_part" whatsapp "$rest_part"
+        fi
+        ;;
+    --telegram|--tg)
+        cmd_part=$(echo "$PARAM" | awk '{print $1}')
+        rest_part=$(echo "$PARAM" | cut -d' ' -f2-)
+        if [ -n "$cmd_part" ] && [[ "$cmd_part" != auth* ]] && [[ "$cmd_part" != on* ]] && [[ "$cmd_part" != off* ]] && [[ "$cmd_part" != status* ]]; then
+            # Chat-Nachricht: ella telegram "text" → über OpenClaw an Telegram
+            echo -e "${CYAN}📱 Sende über Telegram...${NC}"
+            sync_tokens
+            $OPENCLAW_BIN agent --agent main --channel telegram --deliver --message "$PARAM"
+        else
+            bash $BASE_DIR/ella-channel "$cmd_part" telegram "$rest_part"
+        fi
+        ;;
     
-    --help|*)   ~/ella/ella-help ;;
+    --help|*)   $BASE_DIR/ella-help ;;
 esac
