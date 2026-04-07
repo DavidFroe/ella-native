@@ -1,50 +1,134 @@
-#!/bin/bash
-source /home/david/ella/ella-core
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source $BASE_DIR/ella-core
 
 VAL="$1"
 
-case "$VAL" in
-    small)  CTX=8192 ;;
-    medium) CTX=16384 ;;
-    large)  CTX=32768 ;;
-    [0-9]*) CTX=$VAL ;;
-    *)
-        echo -e "${RED}Usage: ella --context <small|medium|large|number>${NC}"
-        exit 1
-        ;;
-esac
+# --- SHOW: Aktuelle Kontext-Größe anzeigen ---
+if [ -z "$VAL" ] || [ "$VAL" = "show" ]; then
+    echo -e "${BLUE}🧠 Aktueller Kontext:${NC}"
+    python3 -c "
+import json, os
 
-echo -e "${BLUE}⚙️ Setze Kontext-Fenster auf ${CTX} Token...${NC}"
+GREY = '\033[90m'; CYAN = '\033[36m'; R = '\033[0m'; BOLD = '\033[1m'
 
-# Update JSON via Python
-python3 -c "
-import json, sys
-p = '$OPENCLAW_CONFIG_PATH'
+def fmt(t):
+    if t >= 1000000: return f'{t//1000000}M'
+    if t >= 1000:    return f'{t//1000}K'
+    return str(t)
+
+# Owltrail context_min als Referenz
+owltrail_dir = os.environ.get('OWLTRAIL_DIR', os.path.expanduser('~/apps/owltrail'))
+ctx_min = 0
 try:
-    with open(p, 'r') as f: d = json.load(f)
-    
-    # 1. Update in agents.defaults (Global fallback)
-    if 'agents' not in d: d['agents'] = {}
-    if 'defaults' not in d['agents']: d['agents']['defaults'] = {}
-    d['agents']['defaults']['contextWindow'] = $CTX
-    
-    # 2. Update specific models (custom-127-0-0-1-8081/lm-1)
-    providers = d.get('models', {}).get('providers', {})
-    for provider in providers.values():
-        for model in provider.get('models', []):
-            model['contextWindow'] = $CTX
-            model['maxTokens'] = $CTX
-            
-    with open(p, 'w') as f: json.dump(d, f, indent=4)
-    print('✅ openclaw.json aktualisiert.')
-except Exception as e:
-    print(f'❌ Fehler: {e}')
+    with open(os.path.join(owltrail_dir, 'config.json')) as f:
+        ot = json.load(f)
+    ctx_min = ot.get('context_min', 0)
+except: pass
+
+# Erste vorhandene Config nutzen (kein Duplikat)
+for p in ['$OPENCLAW_CONFIG_PATH', os.path.expanduser('~/.openclaw/openclaw.json')]:
+    if not p or not os.path.exists(p): continue
+    try:
+        with open(p) as f: d = json.load(f)
+        providers = d.get('models', {}).get('providers', {})
+        shown = False
+        for pname, prov in providers.items():
+            for m in prov.get('models', []):
+                mt = m.get('maxTokens', 0)
+                if not mt: continue
+                h = fmt(mt)
+                print(f'  OpenClaw:  {BOLD}{h}{R} ({mt:,} Tokens)')
+                if ctx_min and mt < ctx_min:
+                    print(f'  {GREY}⚠ unter owltrail context_min ({fmt(ctx_min)}){R}')
+                shown = True
+        primary = d.get('agents',{}).get('defaults',{}).get('model',{}).get('primary','')
+        if primary:
+            print(f'  Modell:    {GREY}{primary}{R}')
+        if ctx_min:
+            print(f'  Min (owltrail): {CYAN}{fmt(ctx_min)}{R} ({ctx_min:,} Tokens)')
+        break
+    except: pass
+" 2>/dev/null
+    exit 0
+fi
+
+# --- MAX: Maximalen Kontext setzen (owltrail max_tokens) ---
+if [ "$VAL" = "max" ]; then
+    CTX=$(python3 -c "
+import json
+p = '$OWLTRAIL_DIR/config.json'
+try:
+    with open(p) as f: d = json.load(f)
+    print(d.get('max_tokens', 1000000))
+except: print(1000000)
+")
+    echo -e "${BLUE}⚙️ Setze Kontext auf Maximum: ${CTX} Tokens ($(python3 -c "
+t=$CTX
+if t >= 1048576: print(f'{t/1048576:.1f}M')
+elif t >= 1024: print(f'{t//1024}K')
+else: print(t)
+"))${NC}"
+else
+    # --- Wert parsen (Token-basiert) ---
+    case "$VAL" in
+        small)   CTX=8192 ;;
+        medium)  CTX=16384 ;;
+        large)   CTX=32768 ;;
+        *[kK])   CTX=$(( ${VAL%[kK]} * 1000 )) ;;
+        *[mM])   CTX=$(( ${VAL%[mM]} * 1000000 )) ;;
+        [0-9]*)  CTX=$VAL ;;
+        *)
+            echo -e "${BLUE}🧠 ella --context — Kontext-Fenster steuern${NC}"
+            echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo -e "  ${GREEN}ella context show${NC}      Aktuelle Größe anzeigen"
+            echo -e "  ${GREEN}ella context max${NC}       Maximum setzen (owltrail)"
+            echo -e "  ${GREEN}ella context 32K${NC}       32.000 Tokens"
+            echo -e "  ${GREEN}ella context 1M${NC}        1.000.000 Tokens"
+            echo -e "  ${GREEN}ella context 500000${NC}    Exakte Token-Anzahl"
+            echo -e "  ${GREEN}ella context small${NC}     8K  Tokens"
+            echo -e "  ${GREEN}ella context medium${NC}    16K Tokens"
+            echo -e "  ${GREEN}ella context large${NC}     32K Tokens"
+            exit 1
+            ;;
+    esac
+
+    # Menschenlesbare Anzeige
+    if [ "$CTX" -ge 1000000 ]; then
+        HUMAN="$(python3 -c "print(f'{$CTX/1000000:.1f}M')")"
+    elif [ "$CTX" -ge 1000 ]; then
+        HUMAN="${CTX%000}K"
+        [ "$HUMAN" = "K" ] && HUMAN="${CTX} Tokens"
+    else
+        HUMAN="${CTX} Tokens"
+    fi
+    echo -e "${BLUE}⚙️ Setze Kontext-Fenster auf ${CTX} Tokens (${HUMAN})...${NC}"
+fi
+
+# Update BEIDE OpenClaw Configs
+python3 -c "
+import json, sys, os
+configs = ['$OPENCLAW_CONFIG_PATH', os.path.expanduser('~/.openclaw/openclaw.json')]
+updated = 0
+for p in configs:
+    try:
+        with open(p, 'r') as f: d = json.load(f)
+        providers = d.get('models', {}).get('providers', {})
+        for provider in providers.values():
+            for model in provider.get('models', []):
+                model['maxTokens'] = $CTX
+        with open(p, 'w') as f: json.dump(d, f, indent=4)
+        updated += 1
+    except Exception as e:
+        pass
+
+if updated > 0:
+    print(f'✅ {updated} Config(s) aktualisiert.')
+else:
+    print('❌ Keine Config gefunden.')
     sys.exit(1)
 "
 
 if [ $? -eq 0 ]; then
     echo -e "${YELLOW}🔄 Starte Ella-Pi neu, um Änderungen zu übernehmen...${NC}"
-    # Native Restart
-    /home/david/ella/ella --restart
+    $BASE_DIR/ella --restart
 fi
-

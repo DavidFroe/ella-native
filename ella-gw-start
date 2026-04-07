@@ -1,13 +1,12 @@
 #!/bin/bash
-source /home/david/ella/ella-core
+source /home/ella/apps/ella-native/ella-core
 
 # --- ELLA-PI MASTER LAUNCHER ---
 echo -e "${BLUE}🚀 ELLA-PI: Brute-Force Startup (v10.0)${NC}"
 
 # 1. PORT CLEANUP (Native)
-echo -ne "  🔪 Cleaning Ports ($GATEWAY_PORT, $OWLTRAIL_PORT)... "
+echo -ne "  🔪 Cleaning Port ($GATEWAY_PORT)... "
 sudo fuser -k $GATEWAY_PORT/tcp 2>/dev/null || true
-sudo fuser -k $OWLTRAIL_PORT/tcp 2>/dev/null || true
 sleep 1
 echo -e "${GREEN}OK${NC}"
 
@@ -20,10 +19,13 @@ echo -ne "  🚀 Launching OpenClaw Gateway... "
 nohup $OPENCLAW_BIN gateway --force --bind 0.0.0.0 > "$HOME/.ella_gw.log" 2>&1 &
 sleep 2
 
-# 4. OWLTRAIL PROXY (Native Launch)
-if [ -f "$OWLTRAIL_BIN" ]; then
-    echo -ne "  🛰️  Launching owlTrail Proxy...   "
-    nohup python3 "$OWLTRAIL_BIN" > "$HOME/.ella_owltrail.log" 2>&1 &
+# 4. OWLTRAIL PROXY (via CLI)
+if [ -x "$OWLTRAIL_CLI" ]; then
+    echo -ne "  🦉 Launching owltrail Proxy...   "
+    $OWLTRAIL_CLI server start 2>/dev/null | tail -1
+elif [ -f "$OWLTRAIL_BIN" ]; then
+    echo -ne "  🦉 Launching owltrail Proxy...   "
+    cd "$OWLTRAIL_DIR" && nohup ./venv/bin/python3 owltrail_server.py > "$HOME/.ella_owltrail.log" 2>&1 &
     sleep 1
 fi
 

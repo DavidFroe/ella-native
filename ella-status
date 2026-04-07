@@ -1,5 +1,5 @@
-#!/bin/bash
-source /home/david/ella/ella-core
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source $BASE_DIR/ella-core
 
 echo -e "${BLUE}📊 --- ELLA-PI MASTER STATUS (v${ELLA_VERSION}) ---${NC}"
 echo -e "${GREY}------------------------------------------------------------${NC}"
@@ -9,8 +9,18 @@ echo -e "${MAGENTA}🌀 ACTIVE PROCESSES:${NC}"
 GW_PID=$(pgrep -f "openclaw gateway|openclaw-gateway" | head -1)
 [ -n "$GW_PID" ] && echo -e "  🛰️  Gateway:    ${GREEN}RUNNING (PID $GW_PID)${NC}" || echo -e "  🛰️  Gateway:    ${RED}OFFLINE${NC}"
 
-OWL_PID=$(pgrep -f "owlTrail.py" | head -1)
-[ -n "$OWL_PID" ] && echo -e "  🦉 owlTrail:   ${GREEN}RUNNING (PID $OWL_PID)${NC}" || echo -e "  🦉 owlTrail:   ${RED}OFFLINE${NC}"
+OWL_PID=$(pgrep -f "owltrail_server" | head -1)
+if [ -z "$OWL_PID" ]; then
+    # Fallback: HTTP health check
+    OWL_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://127.0.0.1:$OWLTRAIL_PORT/v1/models" 2>/dev/null)
+    if [ "$OWL_HTTP" = "200" ]; then
+        echo -e "  🦉 owltrail:   ${GREEN}RUNNING (HTTP OK)${NC}"
+    else
+        echo -e "  🦉 owltrail:   ${RED}OFFLINE${NC}"
+    fi
+else
+    echo -e "  🦉 owltrail:   ${GREEN}RUNNING (PID $OWL_PID)${NC}"
+fi
 
 # 2. SYSTEM RESOURCES
 echo -e "\n${MAGENTA}📈 SYSTEM LOAD:${NC}"
@@ -21,7 +31,7 @@ echo -e "  💾 RAM:         ${YELLOW}$RAM_FREE${NC}"
 
 # 3. OPENCLAW STATUS
 echo -e "\n${MAGENTA}🧠 AGENT PROFILE:${NC}"
-OC_STATUS=$(timeout 5 $OPENCLAW_BIN status --all 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g')
+OC_STATUS=$(timeout 15 $OPENCLAW_BIN status --all 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g')
 if [ -n "$OC_STATUS" ]; then
     OC_VERSION=$(echo "$OC_STATUS" | grep -E '│\s+Version\s+│' | awk -F '│' '{print $3}' | xargs)
     OC_AGENTS=$(echo "$OC_STATUS" | grep -E '│\s+Agents\s+│' | awk -F '│' '{print $3}' | xargs)

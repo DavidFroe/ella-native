@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=david
-WorkingDirectory=/home/david/ella
-ExecStart=/home/david/ella/ella --start
-ExecStop=/home/david/ella/ella --stop
+User={{USER}}
+WorkingDirectory={{INSTALL_DIR}}
+ExecStart={{INSTALL_DIR}}/ella-start
+ExecStop={{INSTALL_DIR}}/ella --stop
 RemainAfterExit=yes
 Restart=on-failure
 

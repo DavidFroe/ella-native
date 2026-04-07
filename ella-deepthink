@@ -1,0 +1,144 @@
+#!/bin/bash
+# ================================================================
+# ELLA DEEPTHINK - Persistenz-Loop für hartnäckige Aufgaben
+# ================================================================
+# Schickt einen Prompt an Ella, wartet auf ihr Signal (oder Timeout),
+# prüft dann per Check-Prompt ob die Aufgabe erledigt ist, und
+# wiederholt den Zyklus bis Ella ERLEDIGT meldet.
+#
+# Usage: ella deepthink --prompt "Aufgabe..." --check "Prüfbedingung..."
+# ================================================================
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source $BASE_DIR/ella-core
+
+# --- Argumente parsen ---
+PROMPT=""
+CHECK=""
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --prompt) PROMPT="$2"; shift 2 ;;
+        --check)  CHECK="$2";  shift 2 ;;
+        --help|-h)
+            echo "Usage: ella deepthink --prompt \"Aufgabe\" --check \"Prüfbedingung\""
+            echo ""
+            echo "  --prompt   Aufgabe die Ella erledigen soll"
+            echo "  --check    Bedingung die nach jeder Runde geprüft wird"
+            echo ""
+            echo "Ella antwortet auf die Check-Frage mit:"
+            echo "  ERLEDIGT   → Loop endet erfolgreich"
+            echo "  AUSSTEHEND → Loop wartet und fragt erneut"
+            echo ""
+            echo "Timeout konfigurierbar in ella.conf: DEEPTHINK_TIMEOUT=60"
+            exit 0
+            ;;
+        *) echo -e "${RED}❌ Unbekannte Option: $1${NC}"; exit 1 ;;
+    esac
+done
+
+if [ -z "$PROMPT" ] || [ -z "$CHECK" ]; then
+    echo -e "${RED}❌ Fehler: --prompt und --check sind erforderlich.${NC}"
+    echo -e "   Beispiel: ella deepthink --prompt \"Installiere nginx\" --check \"Läuft nginx?\""
+    exit 1
+fi
+
+# --- Konfiguration laden ---
+ELLA_CONF="$HOME/.ella.conf"
+[ -f "$ELLA_CONF" ] && source "$ELLA_CONF" 2>/dev/null
+TIMEOUT=${DEEPTHINK_TIMEOUT:-60}
+
+echo -e "${CYAN}${BOLD}🧠 ELLA DEEPTHINK${NC}"
+echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  Aufgabe : ${WHITE}$PROMPT${NC}"
+echo -e "  Check   : ${WHITE}$CHECK${NC}"
+echo -e "  Timeout : ${WHITE}${TIMEOUT}s${NC} pro Runde"
+echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+# --- Wachtler Hook anfordern ---
+echo -e "${CYAN}🔗 Wachtler Hook anfordern...${NC}"
+HOOK_JSON=$(wachtler --json hook 2>/dev/null)
+HOOK_ID=$(echo "$HOOK_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('hook_id',''))" 2>/dev/null)
+
+if [ -z "$HOOK_ID" ]; then
+    echo -e "${RED}❌ Konnte keinen Wachtler Hook anfordern.${NC}"
+    echo -e "   Prüfe: sudo systemctl status wachtler"
+    exit 1
+fi
+
+# Signaldatei im /tmp (ella-beschreibbar, hook-spezifisch)
+STATUS_FILE="/tmp/ella-deepthink-${HOOK_ID}.status"
+echo -e "${GREEN}✅ Hook ${HOOK_ID} aktiv | Signal: $STATUS_FILE${NC}"
+
+# --- Cleanup bei Exit ---
+cleanup() {
+    echo ""
+    rm -f "$STATUS_FILE"
+    wachtler hook free "$HOOK_ID" 2>/dev/null
+    echo -e "${CYAN}🔓 Hook $HOOK_ID freigegeben.${NC}"
+}
+trap cleanup EXIT INT TERM
+
+# --- Hauptschleife ---
+ROUND=0
+while true; do
+    ROUND=$((ROUND + 1))
+    echo -e "\n${BOLD}${CYAN}━━━ DeepThink Runde $ROUND ━━━${NC}"
+
+    # Signaldatei leeren
+    rm -f "$STATUS_FILE"
+
+    # Prompt mit Signalanweisung zusammenbauen
+    SIGNAL_INSTR="Wenn du fertig bist, schreibe bitte das Wort FERTIG (allein, ohne weiteren Text) in die Datei $STATUS_FILE"
+    if [ $ROUND -eq 1 ]; then
+        FULL_PROMPT="${PROMPT} ${SIGNAL_INSTR}"
+    else
+        FULL_PROMPT="Erinnerung (Versuch $ROUND): ${PROMPT} Bitte melde dich wenn du fertig bist: ${SIGNAL_INSTR}"
+    fi
+
+    # --- Schritt 1: Aufgaben-Prompt senden ---
+    echo -e "${CYAN}📤 Sende Aufgabe an Ella...${NC}"
+    TASK_RESPONSE=$($BASE_DIR/ella-ask "$FULL_PROMPT" 2>/dev/null)
+
+    # Direkt-ERLEDIGT in Aufgaben-Antwort? (Ella kann sofort melden)
+    if echo "$TASK_RESPONSE" | grep -qi "ERLEDIGT"; then
+        echo -e "${BLUE}🦉 Ella: $TASK_RESPONSE${NC}"
+        echo -e "\n${GREEN}${BOLD}✅ AUFGABE ABGESCHLOSSEN (Runde $ROUND, Direktantwort)${NC}"
+        exit 0
+    fi
+
+    echo -e "${BLUE}🦉 Ella: $TASK_RESPONSE${NC}"
+
+    # --- Schritt 2: Auf Signal warten (Datei ODER Timeout) ---
+    echo -e "${YELLOW}⏳ Warte auf Ella-Signal (max ${TIMEOUT}s)...${NC}"
+    ELAPSED=0
+    SIGNAL_RECEIVED=false
+    while [ $ELAPSED -lt $TIMEOUT ]; do
+        if [ -f "$STATUS_FILE" ] && grep -qi "FERTIG" "$STATUS_FILE" 2>/dev/null; then
+            SIGNAL_RECEIVED=true
+            echo -e "${GREEN}✅ Ella hat sich gemeldet (nach ${ELAPSED}s)!${NC}"
+            break
+        fi
+        sleep 3
+        ELAPSED=$((ELAPSED + 3))
+        printf "${GREY}.${NC}"
+    done
+    echo ""
+
+    if [ "$SIGNAL_RECEIVED" = false ]; then
+        echo -e "${YELLOW}⏰ Timeout nach ${TIMEOUT}s — prüfe trotzdem...${NC}"
+    fi
+
+    # --- Schritt 3: Check-Prompt senden ---
+    CHECK_FULL="${CHECK} Antworte mit dem Wort ERLEDIGT (wenn die Bedingung erfüllt ist) oder AUSSTEHEND (wenn nicht). Keine andere Antwort nötig."
+    echo -e "${CYAN}🔍 Check-Prompt an Ella...${NC}"
+    CHECK_RESPONSE=$($BASE_DIR/ella-ask "$CHECK_FULL" 2>/dev/null)
+    echo -e "${BLUE}🦉 Ella (Check): $CHECK_RESPONSE${NC}"
+
+    # --- Schritt 4: Ergebnis auswerten ---
+    if echo "$CHECK_RESPONSE" | grep -qi "ERLEDIGT"; then
+        echo -e "\n${GREEN}${BOLD}✅ AUFGABE ABGESCHLOSSEN nach $ROUND Runde(n)${NC}"
+        exit 0
+    else
+        echo -e "${YELLOW}⏳ Noch nicht erledigt. Nächste Runde in 5s...${NC}"
+        sleep 5
+    fi
+done

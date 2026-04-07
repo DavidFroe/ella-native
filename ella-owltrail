@@ -1,0 +1,90 @@
+#!/bin/bash
+# ================================================================
+# ELLA owltrail Wrapper — Steuert owltrail + LLM-Einstellungen
+# ================================================================
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source $BASE_DIR/ella-core
+
+CMD="$1"
+shift 2>/dev/null
+
+if [ -z "$CMD" ]; then
+    CMD="status"
+fi
+
+# Prüfe ob owltrail installiert ist (außer bei model/context/timeout)
+case "$CMD" in
+    model|models|context|timeout) ;;
+    *)
+        if [ ! -x "$OWLTRAIL_CLI" ]; then
+            echo -e "${RED}❌ owltrail CLI nicht gefunden: $OWLTRAIL_CLI${NC}"
+            echo -e "${GREY}   Installiere owltrail: cd $OWLTRAIL_DIR && ./install.sh${NC}"
+            exit 1
+        fi
+        ;;
+esac
+
+case "$CMD" in
+    status)  $OWLTRAIL_CLI server status ;;
+    start)   $OWLTRAIL_CLI server start ;;
+    stop)    $OWLTRAIL_CLI server stop ;;
+    restart) $OWLTRAIL_CLI server restart ;;
+    log)     $OWLTRAIL_CLI server log ;;
+    test)    $OWLTRAIL_CLI server test ;;
+
+    # --- Modelle (owltrail-Sicht) ---
+    models)
+        bash $BASE_DIR/ella-llm models
+        ;;
+
+    # --- Aktives Modell anzeigen / setzen ---
+    model)
+        bash $BASE_DIR/ella-llm model "$@"
+        ;;
+
+    # --- Kontextfenster ---
+    context)
+        chmod +x $BASE_DIR/ella-context
+        $BASE_DIR/ella-context "$@"
+        ;;
+
+    # --- Timeout ---
+    timeout)
+        chmod +x $BASE_DIR/ella-timeout
+        $BASE_DIR/ella-timeout "$@"
+        ;;
+
+    # --- Direkt-Chat (ohne OpenClaw-Agent) ---
+    chat|ask)
+        bash $BASE_DIR/ella-llm "$@"
+        ;;
+
+    ""|--help|-h)
+        echo -e "${BLUE}${BOLD}🦉 ELLA owltrail — Proxy & LLM${NC}"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${BOLD}Server:${NC}"
+        echo -e "  ${GREEN}ella owltrail status${NC}          Server-Status & owlAPI-Verbindung"
+        echo -e "  ${GREEN}ella owltrail start${NC}           Server starten"
+        echo -e "  ${GREEN}ella owltrail stop${NC}            Server stoppen"
+        echo -e "  ${GREEN}ella owltrail restart${NC}         Neustart"
+        echo -e "  ${GREEN}ella owltrail log${NC}             Live-Log anzeigen"
+        echo -e "  ${GREEN}ella owltrail test${NC}            Integrationstest (owlAPI + Inferenz)"
+        echo -e "${BOLD}Modell & Einstellungen:${NC}"
+        echo -e "  ${GREEN}ella owltrail models${NC}          Verfügbare Modelle anzeigen"
+        echo -e "  ${GREEN}ella owltrail model${NC}           Aktuelles Modell anzeigen"
+        echo -e "  ${GREEN}ella owltrail model <id>${NC}      Modell setzen (in owltrail config)"
+        echo -e "  ${GREEN}ella owltrail context show${NC}    Kontext-Größe anzeigen"
+        echo -e "  ${GREEN}ella owltrail context max${NC}     Maximum setzen"
+        echo -e "  ${GREEN}ella owltrail context 32K${NC}     32.000 Tokens setzen"
+        echo -e "  ${GREEN}ella owltrail timeout show${NC}    Timeout anzeigen"
+        echo -e "  ${GREEN}ella owltrail timeout <sek>${NC}   Timeout setzen"
+        echo -e "${BOLD}Direkt-Chat (kein Agent):${NC}"
+        echo -e "  ${GREEN}ella owltrail chat \"text\"${NC}     Direkt mit LLM reden"
+        ;;
+
+    *)
+        echo -e "${RED}❌ Unbekannter owltrail-Befehl: $CMD${NC}"
+        echo -e "   ella owltrail --help"
+        exit 1
+        ;;
+esac

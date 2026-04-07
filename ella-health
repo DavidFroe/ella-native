@@ -1,10 +1,10 @@
 #!/bin/bash
-source /home/david/ella/ella-core
+source /home/ella/apps/ella-native/ella-core
 
 GW_OK=false
 if check_gw_http; then GW_OK=true; fi
 INT_OK=$(ping -c 1 -W 1 8.8.8.8 >/dev/null 2>&1 && echo "true" || echo "false")
-OWL_OK=$(pgrep -f "owlTrail.py" >/dev/null && echo "true" || echo "false")
+OWL_OK=$(pgrep -f "owltrail.py" >/dev/null && echo "true" || echo "false")
 
 echo -e "${BLUE}🧬 --- ELLA-PI QUICK HEALTH (v${ELLA_VERSION}) ---${NC}"
 echo -e "🚀 Status:      ${GREEN}NATIV RUNNING${NC}"

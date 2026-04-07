@@ -1,5 +1,5 @@
 #!/bin/bash
-source /home/david/ella/ella-core
+source /home/ella/apps/ella-native/ella-core
 
 # 0. PRE-FLIGHT CHECKS
 sync_tokens
@@ -55,7 +55,34 @@ fi
 echo -e "🛰️  Starte OpenClaw Gateway..."
 ~/.local/bin/ella-gw-start
 
-# 5. FINAL CHECK
+# 5. START BACKEND SERVICES (owlAPI → QuiteQue → owltrail)
+echo -e "🦉 ${BLUE}Starte Backend-Services...${NC}"
+
+if [ -x "$HOME/.local/bin/owl" ]; then
+    echo -ne "  🦉 owlAPI...      "
+    $HOME/.local/bin/owl server start 2>/dev/null | tail -1
+fi
+
+if [ -x "$HOME/apps/QuiteQue/qq" ]; then
+    echo -ne "  🔀 QuiteQue...    "
+    $HOME/apps/QuiteQue/qq start 2>/dev/null | tail -1
+fi
+
+OWLTRAIL_DIR="$HOME/apps/owltrail"
+OWLTRAIL_CLI="$OWLTRAIL_DIR/owltrail"
+if [ -x "$OWLTRAIL_CLI" ]; then
+    echo -ne "  🦉 owltrail...    "
+    $OWLTRAIL_CLI server start 2>/dev/null | tail -1
+fi
+
+# 6. MODEL CHECK (owlAPI braucht frische Status-Daten nach Reboot)
+echo -ne "  🔍 Model-Check... "
+if [ -x "$HOME/.local/bin/owl" ]; then
+    $HOME/.local/bin/owl check-all > /dev/null 2>&1 &
+    echo -e "${GREEN}gestartet (Hintergrund)${NC}"
+fi
+
+# 7. FINAL CHECK
 if check_gw_http; then
     echo -e "\n✅ ${GREEN}ELLA ist ONLINE.${NC}"
 else

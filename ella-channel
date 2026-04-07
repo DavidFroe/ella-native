@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+
+# ella-channel - OpenClaw Channel Management Wrapper
+# Ermöglicht die Steuerung von Telegram, WhatsApp etc. über das ella CLI
+
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source "$BASE_DIR/ella-core"
+
+CMD="$1"
+CHANNEL="$2"
+PARAM="$3"
+
+print_usage() {
+    echo -e "${BLUE}${BOLD}📱 ELLA CHANNEL MANAGEMENT${NC}"
+    echo -e "${GREY}------------------------------------------------------------${NC}"
+    echo -e "Steuere externe Messenger für Ella (via OpenClaw Gateway)"
+    echo -e ""
+    echo -e "  ${GREEN}ella --channel list${NC}              Zeigt alle geladenen Kanäle & Status"
+    echo -e "  ${GREEN}ella --channel on <kanal>${NC}        Aktiviert einen Kanal (z.B. whatsapp)"
+    echo -e "  ${GREEN}ella --channel off <kanal>${NC}       Deaktiviert einen Kanal"
+    echo -e "  ${GREEN}ella --channel delete <kanal>${NC}    Löscht Kanal und Credentials"
+    echo -e "  ${GREEN}ella --channel status${NC}            Verbindungsstatus & Health-Check"
+    echo -e ""
+    echo -e "${BOLD}🔑 Authentifizierung (Shortcuts):${NC}"
+    echo -e "  ${CYAN}ella --whatsapp auth${NC}             Startet QR-Code Pairing für WhatsApp"
+    echo -e "  ${CYAN}ella --telegram auth <code>${NC}      Bestätigt einen Telegram Pairing-Code"
+    echo -e ""
+}
+
+if [ -z "$CMD" ]; then
+    print_usage
+    exit 1
+fi
+
+case "$CMD" in
+    list|ls)
+        echo -e "${BLUE}🔎 Aktuelle OpenClaw Kanäle:${NC}"
+        $OPENCLAW_BIN channels list
+        ;;
+    
+    on)
+        if [ -z "$CHANNEL" ]; then
+            echo -e "${RED}Fehler: Bitte gib einen Kanal an (z.B. whatsapp, telegram).${NC}"
+            exit 1
+        fi
+        echo -e "${YELLOW}Aktiviere Kanal: $CHANNEL...${NC}"
+        $OPENCLAW_BIN config set channels.$CHANNEL.enabled true --json
+        echo -e "${GREEN}✅ Kanal $CHANNEL in config aktiviert.${NC}"
+        echo -e "${GREY}Hinweis: Ein Neustart des Gateways (ella --restart) ist ggf. erforderlich.${NC}"
+        ;;
+    
+    off)
+        if [ -z "$CHANNEL" ]; then
+            echo -e "${RED}Fehler: Bitte gib einen Kanal an.${NC}"
+            exit 1
+        fi
+        echo -e "${YELLOW}Deaktiviere Kanal: $CHANNEL...${NC}"
+        $OPENCLAW_BIN config set channels.$CHANNEL.enabled false --json
+        echo -e "${GREEN}✅ Kanal $CHANNEL in config deaktiviert.${NC}"
+        ;;
+        
+    delete|rm)
+        if [ -z "$CHANNEL" ]; then
+            echo -e "${RED}Fehler: Bitte gib einen Kanal an.${NC}"
+            exit 1
+        fi
+        echo -e "${RED}⚠️  Achtung: Dies löscht die lokalen Anmeldedaten für $CHANNEL.${NC}"
+        read -p "Fortfahren? [j/N] " choice
+        if [[ "$choice" =~ ^[jJ]$ ]]; then
+            $OPENCLAW_BIN channels remove --channel "$CHANNEL" --delete
+            echo -e "${GREEN}✅ Kanal $CHANNEL und zugehörige Daten gelöscht.${NC}"
+        fi
+        ;;
+
+    auth)
+        if [ -z "$CHANNEL" ]; then
+            echo -e "${RED}Fehler: Bitte gib einen Kanal an (whatsapp|telegram).${NC}"
+            exit 1
+        fi
+        
+        if [ "$CHANNEL" == "whatsapp" ] || [ "$CHANNEL" == "wa" ]; then
+            echo -e "${BLUE}📱 WhatsApp QR-Code Authentifizierung${NC}"
+            echo -e "1. Öffne WhatsApp auf deinem Handy."
+            echo -e "2. Gehe zu Einstellungen -> Verknüpfte Geräte -> Gerät hinzufügen."
+            echo -e "3. Scanne den QR-Code, der gleich hier erscheint."
+            echo -e "${GREY}------------------------------------------------------------${NC}"
+            
+            # Stelle sicher, dass der Kanal in der config aktiv ist
+            $OPENCLAW_BIN config set channels.whatsapp.enabled true --json >/dev/null 2>&1
+            $OPENCLAW_BIN channels login --channel whatsapp
+            
+        elif [ "$CHANNEL" == "telegram" ] || [ "$CHANNEL" == "tg" ]; then
+            if [ -z "$PARAM" ]; then
+                echo -e "${BLUE}📱 Telegram Pairing Auth${NC}"
+                echo -e "Verwendung: ${GREEN}ella --telegram auth <1234ABCD>${NC}"
+                echo -e ""
+                echo -e "Wenn du den Bot auf Telegram anschreibst und noch nicht freigeschaltet bist,"
+                echo -e "sendet dir der Bot einen kurzen Pairing-Code zurück. Gib diesen hier ein."
+                exit 1
+            fi
+            
+            echo -e "${YELLOW}Versuche Telegram Pairing Code zu authorisieren: $PARAM...${NC}"
+            
+            # Stelle sicher, dass der Kanal aktiv ist
+            $OPENCLAW_BIN config set channels.telegram.enabled true --json >/dev/null 2>&1
+            $OPENCLAW_BIN pairing approve telegram "$PARAM"
+        else
+            echo -e "${YELLOW}Info: Auth-Flow für diesen Kanal möglicherweise nicht voll unterstützt.${NC}"
+            $OPENCLAW_BIN channels login --channel "$CHANNEL"
+        fi
+        ;;
+
+    status)
+        echo -e "${BLUE}🩺 Channel Verbindungsstatus:${NC}"
+        $OPENCLAW_BIN channels status
+        ;;
+
+    *)
+        echo -e "${RED}Unbekannter Channel-Befehl: $CMD${NC}"
+        print_usage
+        exit 1
+        ;;
+esac

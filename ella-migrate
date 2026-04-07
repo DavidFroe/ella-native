@@ -1,5 +1,5 @@
-#!/bin/bash
-source /home/david/ella/ella-core
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source $BASE_DIR/ella-core
 
 echo -e "${BLUE}${BOLD}🚀 ELLA-PI: THE MIGRATOR (v10.0)${NC}"
 echo -e "${GREY}------------------------------------------------------------${NC}"

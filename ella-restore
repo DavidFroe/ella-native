@@ -1,5 +1,5 @@
 #!/bin/bash
-source /home/david/ella/ella-core
+source /home/ella/apps/ella-native/ella-core
 
 # --- KONFIGURATION ---
 BACKUP_DIR="$HOME/ella-backups"

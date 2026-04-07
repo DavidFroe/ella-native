@@ -1,12 +1,12 @@
 #!/bin/bash
-source /home/david/ella/ella-core
+source /home/ella/apps/ella-native/ella-core
 
 echo -e "${RED}${BOLD}🚨 ELLA-PI HARD RESET (v10.0)${NC}"
 echo -e "${GREY}------------------------------------------------------------${NC}"
 
 # 1. SHUTDOWN
 echo -e "🛑 1. Stopping Processes..."
-/home/david/ella/ella --stop >/dev/null 2>&1
+/home/ella/apps/ella-native/ella --stop >/dev/null 2>&1
 
 # 2. LOG-WIPE
 echo -e "🧹 2. Wiping Logs..."
@@ -27,6 +27,6 @@ export_gateway_token
 
 # 5. START
 echo -e "🚀 5. Mastering Startup..."
-/home/david/ella/ella --start
+/home/ella/apps/ella-native/ella --start
 
 echo -e "\n✨ ${GREEN}${BOLD}Ella-Pi wurde vollständig zurückgesetzt (Bare Metal Edition).${NC}"

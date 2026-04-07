@@ -1,0 +1,120 @@
+#!/bin/bash
+# ================================================================
+# ELLA openclaw Wrapper — OpenClaw Agent Admin & Status
+#
+# Zuständig für:
+#   - OpenClaw Gateway (Prozess, Start/Stop)
+#   - Channels (Telegram, WhatsApp, etc.)
+#   - Sessions (laufende Gespräche/Projekte)
+#   - Leseansicht: welches Modell/Kontext nutzt OpenClaw gerade?
+#
+# NICHT zuständig für:
+#   - Modellauswahl / Routing → ella owltrail
+#   - Kontext setzen → ella owltrail context
+# ================================================================
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source $BASE_DIR/ella-core
+
+CMD="$1"
+shift 2>/dev/null
+
+show_help() {
+    echo -e "${BLUE}${BOLD}🐾 ELLA openclaw — Agent Admin${NC}"
+    echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}Gateway (Prozess):${NC}"
+    echo -e "  ${GREEN}ella openclaw status${NC}            Status & Health"
+    echo -e "  ${GREEN}ella openclaw start${NC}             Gateway starten"
+    echo -e "  ${GREEN}ella openclaw stop${NC}              Gateway stoppen"
+    echo -e "  ${GREEN}ella openclaw restart${NC}           Gateway Neustart"
+    echo -e "  ${GREEN}ella openclaw log${NC}               Live-Log (Ctrl+C)"
+    echo -e "${BOLD}Channels:${NC}"
+    echo -e "  ${GREEN}ella openclaw channels${NC}          Alle Kanäle anzeigen"
+    echo -e "  ${GREEN}ella openclaw channel on <name>${NC}  Kanal aktivieren"
+    echo -e "  ${GREEN}ella openclaw channel off <name>${NC} Kanal deaktivieren"
+    echo -e "${BOLD}Sessions (laufende Gespräche):${NC}"
+    echo -e "  ${GREEN}ella openclaw sessions${NC}          Aktive Sessions anzeigen"
+    echo -e "  ${GREEN}ella openclaw sessions reset${NC}    Alle Sessions löschen"
+    echo -e "  ${GREEN}ella openclaw sessions <id>${NC}     Eine Session löschen"
+    echo -e "${BOLD}Info (Leseansicht):${NC}"
+    echo -e "  ${GREEN}ella openclaw model${NC}             Aktives Modell anzeigen (owltrail-Sicht)"
+    echo -e "  ${GREEN}ella openclaw context${NC}           Kontext anzeigen (owltrail ist Master)"
+    echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  Modell/Kontext setzen → ${CYAN}ella owltrail model/context${NC}"
+}
+
+case "$CMD" in
+    # --- Gateway ---
+    status)
+        echo -e "${BLUE}🐾 OpenClaw Status:${NC}"
+        $OPENCLAW_BIN gateway status 2>&1
+        ;;
+    start)
+        echo -e "${CYAN}🚀 OpenClaw Gateway starten...${NC}"
+        sync_tokens
+        export_gateway_token
+        $OPENCLAW_BIN gateway start 2>&1
+        sleep 2
+        if check_gw_http; then
+            echo -e "${GREEN}✅ Gateway läuft${NC}"
+        else
+            echo -e "${RED}❌ Start fehlgeschlagen${NC}"
+        fi
+        ;;
+    stop)
+        echo -e "${YELLOW}🛑 OpenClaw Gateway stoppen...${NC}"
+        $OPENCLAW_BIN gateway stop 2>&1
+        ;;
+    restart)
+        echo -e "${YELLOW}🔄 OpenClaw Gateway Neustart...${NC}"
+        $OPENCLAW_BIN gateway stop > /dev/null 2>&1
+        sleep 1
+        sync_tokens
+        export_gateway_token
+        $OPENCLAW_BIN gateway start 2>&1
+        sleep 2
+        if check_gw_http; then
+            echo -e "${GREEN}✅ Gateway läuft${NC}"
+        else
+            echo -e "${RED}❌ Start fehlgeschlagen${NC}"
+        fi
+        ;;
+    log|logs)
+        $OPENCLAW_BIN logs --follow 2>&1
+        ;;
+
+    # --- Channels ---
+    channels)
+        bash $BASE_DIR/ella-channel list
+        ;;
+    channel)
+        bash $BASE_DIR/ella-channel "$@"
+        ;;
+
+    # --- Sessions ---
+    sessions)
+        chmod +x $BASE_DIR/ella-sessions
+        $BASE_DIR/ella-sessions "$@"
+        ;;
+
+    # --- Leseansicht: Modell & Kontext ---
+    model)
+        echo -e "${BLUE}🐾 Aktives Modell (OpenClaw-Sicht via owltrail):${NC}"
+        bash $BASE_DIR/ella-llm model
+        echo -e "${GREY}  Zum Setzen: ella owltrail model <id>${NC}"
+        ;;
+    context)
+        echo -e "${BLUE}🐾 Kontext (owltrail ist Master):${NC}"
+        chmod +x $BASE_DIR/ella-context
+        $BASE_DIR/ella-context show
+        echo -e "${GREY}  Zum Setzen: ella owltrail context <größe>${NC}"
+        ;;
+
+    ""|--help|-h)
+        show_help
+        ;;
+    *)
+        echo -e "${RED}❌ Unbekannter openclaw-Befehl: $CMD${NC}"
+        echo -e "   ella openclaw --help"
+        exit 1
+        ;;
+esac

@@ -1,0 +1,72 @@
+#!/bin/bash
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source $BASE_DIR/ella-core
+
+VAL="$1"
+
+# --- SHOW: Aktuelles Timeout anzeigen ---
+if [ -z "$VAL" ] || [ "$VAL" = "show" ]; then
+    echo -e "${BLUE}⏱️  Aktuelles Timeout (LLM Proxies):${NC}"
+    python3 -c "
+import json, os
+
+qq_path = os.path.expanduser('~/apps/QuiteQue/config.json')
+ot_path = os.path.expanduser('~/apps/owltrail/config.json')
+
+try:
+    with open(qq_path) as f: d = json.load(f)
+    print(f'  QuiteQue Middleware : {d.get(\"timeout_seconds\", 120)} Sekunden')
+except: pass
+
+try:
+    with open(ot_path) as f: d = json.load(f)
+    print(f'  owltrail Proxy      : {d.get(\"timeout_seconds\", 180)} Sekunden')
+except: pass
+"
+    exit 0
+fi
+
+if [[ ! "$VAL" =~ ^[0-9]+$ ]] && [[ ! "$VAL" =~ ^[0-9]+[sSmM]$ ]]; then
+    echo -e "${BLUE}⏱️  ella --timeout — LLM Request Timeout steuern${NC}"
+    echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${GREEN}ella timeout show${NC}      Aktuelles Timeout anzeigen"
+    echo -e "  ${GREEN}ella timeout 120s${NC}      120 Sekunden"
+    echo -e "  ${GREEN}ella timeout 2m${NC}        2 Minuten"
+    echo -e "  ${GREEN}ella timeout 180${NC}       180 Sekunden"
+    exit 1
+fi
+
+# Parsing
+TIMEOUT_SEC=$VAL
+if [[ "$VAL" =~ [sS]$ ]]; then
+    TIMEOUT_SEC=${VAL%[sS]}
+elif [[ "$VAL" =~ [mM]$ ]]; then
+    val_num=${VAL%[mM]}
+    TIMEOUT_SEC=$((val_num * 60))
+fi
+
+echo -e "${BLUE}⚙️ Setze Timeout für LLM Anfragen auf ${TIMEOUT_SEC} Sekunden...${NC}"
+
+# Update configs
+python3 -c "
+import json, os
+TIMEOUT = int($TIMEOUT_SEC)
+qq_path = os.path.expanduser('~/apps/QuiteQue/config.json')
+ot_path = os.path.expanduser('~/apps/owltrail/config.json')
+
+updated = 0
+for p in [qq_path, ot_path]:
+    try:
+        if not os.path.exists(p): continue
+        with open(p, 'r') as f: d = json.load(f)
+        d['timeout_seconds'] = TIMEOUT
+        with open(p, 'w') as f: json.dump(d, f, indent=4)
+        updated += 1
+    except: pass
+"
+
+echo -e "${YELLOW}🔄 Starte Middleware und Proxies neu...${NC}"
+sudo systemctl restart openclaw-gateway 2>/dev/null || true
+$BASE_DIR/ella qq restart 2>/dev/null || true
+$BASE_DIR/ella owltrail restart 2>/dev/null || true
+echo -e "${GREEN}✅ Timeout erfolgreich angewendet!${NC}"

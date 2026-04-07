@@ -1,0 +1,301 @@
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source $BASE_DIR/ella-core
+
+OWLTRAIL_URL="http://localhost:${OWLTRAIL_PORT:-8081}"
+CMD="$1"
+
+# --- Hilfe ---
+show_help() {
+    echo -e "${BLUE}${BOLD}🤖 ELLA LLM — Direkter LLM-Zugriff${NC}"
+    echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${GREEN}ella llm \"text\"${NC}          Direkt mit LLM reden"
+    echo -e "  ${GREEN}ella llm models${NC}          Verfügbare Modelle anzeigen"
+    echo -e "  ${GREEN}ella llm model${NC}           Aktuelles Modell anzeigen"
+    echo -e "  ${GREEN}ella llm model <id>${NC}      Modell setzen"
+    echo -e "  ${GREEN}ella llm context show${NC}    Kontext-Größe anzeigen"
+    echo -e "  ${GREEN}ella llm context max${NC}     Maximum setzen (owltrail)"
+    echo -e "  ${GREEN}ella llm context 32K${NC}     32.000 Tokens"
+    echo -e "  ${GREEN}ella llm context 1M${NC}      1.000.000 Tokens"
+    echo -e "  ${GREEN}ella llm test${NC}            owltrail Integrationstest"
+    echo ""
+    echo -e "  ${GREY}Kein OpenClaw Agent — direkt owltrail → owlAPI → LLM${NC}"
+}
+
+case "$CMD" in
+    # --- Modelle auflisten ---
+    models)
+        echo -e "${BLUE}🤖 Verfügbare LLM-Modelle:${NC}"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        curl -s "$OWLTRAIL_URL/v1/models" 2>/dev/null | python3 -c "
+import json, sys, os
+try:
+    data = json.load(sys.stdin)
+    models = data.get('data', [])
+    # Aktives Modell aus owltrail-Config lesen
+    owltrail_dir = os.environ.get('OWLTRAIL_DIR', os.path.expanduser('~/apps/owltrail'))
+    try:
+        with open(os.path.join(owltrail_dir, 'config.json')) as f:
+            active_id = str(json.load(f).get('target_model_id', ''))
+    except: active_id = ''
+    B = '\033[1m'; R = '\033[0m'; MAG = '\033[35m'; GREEN = '\033[32m'
+    print(f'  {\"ID\":>5s}  {\"Name\":<40s}  {\"Ctx\":>5s}  {\"Provider\":<10s}  Status')
+    print('  ' + '─'*80)
+    for m in models:
+        mid = str(m.get('id', '?'))
+        name = m.get('name', m.get('model_id', mid))
+        ctx = m.get('context_window', '?')
+        owner = m.get('owned_by', '?')
+        status = m.get('status', 'OK')
+        if isinstance(ctx, int):
+            if ctx >= 1048576: ctx_h = f'{ctx/1048576:.0f}M'
+            elif ctx >= 1024: ctx_h = f'{ctx//1024}K'
+            else: ctx_h = str(ctx)
+        else: ctx_h = str(ctx)
+        is_active = mid == active_id
+        line = f'  {mid:>5s}  {name:<40s}  {ctx_h:>5s}  {owner:<10s}  {status}'
+        if is_active:
+            print(f'{MAG}{B}► {line.strip()}{R}  ◄ aktiv')
+        else:
+            print(line)
+except Exception as e:
+    print(f'Fehler: {e}')
+" 2>/dev/null || echo -e "${RED}❌ owltrail nicht erreichbar${NC}"
+        ;;
+
+    # --- Aktuelles Modell anzeigen/setzen ---
+    model)
+        if [ -z "$2" ]; then
+            echo -e "${BLUE}🤖 Modell & Routing (owltrail):${NC}"
+            curl -s "$OWLTRAIL_URL/v1/models" 2>/dev/null | python3 -c "
+import json, sys, os
+
+GREY   = '\033[90m'; CYAN  = '\033[36m'; GREEN = '\033[32m'
+YELLOW = '\033[33m'; RED   = '\033[31m'; BOLD  = '\033[1m'
+R = '\033[0m';       MAG   = '\033[35m'
+
+def fmt_ctx(ctx):
+    if not isinstance(ctx, int) or ctx <= 0: return '?'
+    if ctx >= 1000000: return f'{ctx//1000000}M'
+    if ctx >= 1000:    return f'{ctx//1000}K'
+    return str(ctx)
+
+def status_color(s):
+    s = (s or '').upper()
+    if 'OK' in s or 'BEREIT' in s or 'EINGELOGGT' in s: return GREEN
+    if 'BUSY' in s or 'GENERIERT' in s:                 return YELLOW
+    return RED
+
+# Alle Status die ein Modell wirklich unbrauchbar machen
+BAD_KEYWORDS = ('ERROR','OFFLINE','FEHLER','RATE_LIMIT','RATE LIMIT','IDLE',
+                'KEIN MODELL','KEIN GUTHABEN','ZUGRIFF','TIMEOUT','PAUSIERT')
+
+def get_status(m):
+    # owltrail liefert check_status, owlAPI liefert status — beide prüfen
+    return m.get('check_status') or m.get('status') or ''
+
+def is_bad(m):
+    s = get_status(m).upper()
+    return any(k in s for k in BAD_KEYWORDS)
+
+try:
+    owltrail_dir = os.environ.get('OWLTRAIL_DIR', os.path.expanduser('~/apps/owltrail'))
+    with open(os.path.join(owltrail_dir, 'config.json')) as f: cfg = json.load(f)
+    target    = str(cfg.get('target_model_id', 'auto'))
+    ctx_min   = int(cfg.get('context_min', 0))
+    waterfall = cfg.get('waterfall_models', [])
+    username  = cfg.get('username', 'ella')
+
+    data       = json.load(sys.stdin)
+    all_models = data.get('data', [])
+    by_id      = {str(m.get('id','')): m for m in all_models}
+
+    # Verfügbare Modelle: kein bad-Status + context_window >= context_min
+    def usable(m):
+        if is_bad(m): return False
+        cw = m.get('context_window', 0)
+        if ctx_min and isinstance(cw, int) and cw > 0 and cw < ctx_min: return False
+        return True
+
+    available = [m for m in all_models if usable(m)]
+
+    # QuiteQue-Nutzerkonfig für Reihenfolge (optional)
+    qq_dir = os.path.expanduser('~/apps/QuiteQue')
+    user_order = []
+    try:
+        with open(os.path.join(qq_dir, f'{username}.json')) as f:
+            uj = json.load(f)
+        user_order = [str(x) for x in uj.get('allowed_models', [])]
+    except: pass
+
+    if user_order:
+        order_map = {mid: i for i, mid in enumerate(user_order)}
+        # owltrail liefert id=model_id-String UND numerical_id=Nummer — beide prüfen
+        def sort_key(m):
+            by_id  = order_map.get(str(m.get('id','')), 9999)
+            by_num = order_map.get(str(m.get('numerical_id','')), 9999)
+            return min(by_id, by_num)
+        available.sort(key=sort_key)
+
+    if target == 'auto':
+        mode_label = f'{BOLD}auto{R} (QuiteQue)'
+    else:
+        mode_label = f'{BOLD}{target}{R}'
+    print(f'  Modus:     {mode_label}')
+    if ctx_min:
+        print(f'  Min-Ctx:   {CYAN}{fmt_ctx(ctx_min)}{R}')
+
+    if not available:
+        print(f'  {RED}⚠ Keine verfügbaren Modelle!{R}')
+        # Zeige warum (top 3 unavailable)
+        for m in all_models[:3]:
+            mid = str(m.get('id','?'))
+            st  = m.get('status','?')
+            cw  = m.get('context_window', 0)
+            print(f'  {GREY}  · [{mid}] {st}  Ctx {fmt_ctx(cw)}{R}')
+    else:
+        top  = available[0]
+        mid  = str(top.get('id','?'))
+        name = top.get('name', mid)
+        ctx  = fmt_ctx(top.get('context_window'))
+        st   = get_status(top) or 'OK'
+        sc   = status_color(st)
+        print(f'  {BOLD}► Wählt:{R} {MAG}{BOLD}{name}{R}  {GREY}[{mid}]{R}  Ctx {CYAN}{ctx}{R}  {sc}{st}{R}')
+
+        fallbacks = available[1:3]
+        if fallbacks:
+            print(f'  {GREY}Fallbacks:{R}')
+            for fb in fallbacks:
+                fid  = str(fb.get('id','?'))
+                fn   = fb.get('name', fid)
+                fctx = fmt_ctx(fb.get('context_window'))
+                fst  = get_status(fb) or 'OK'
+                fsc  = status_color(fst)
+                print(f'    {GREY}·{R} {fn}  {GREY}[{fid}]{R}  Ctx {fctx}  {fsc}{fst}{R}')
+
+    if waterfall:
+        print(f'  {GREY}Waterfall: {\" → \".join(str(w) for w in waterfall)}{R}')
+
+except Exception as e:
+    print(f'  Fehler: {e}')
+" 2>/dev/null
+        else
+            MODEL="$2"
+            python3 -c "
+import json, sys, os
+model_id = sys.argv[1]
+owltrail_dir = os.environ.get('OWLTRAIL_DIR', os.path.expanduser('~/apps/owltrail'))
+config_path = os.path.join(owltrail_dir, 'config.json')
+owltrail_url = sys.argv[2]
+
+# Name auflösen über owltrail
+model_name = model_id
+try:
+    import urllib.request
+    with urllib.request.urlopen(f'{owltrail_url}/v1/models', timeout=15) as r:
+        data = json.loads(r.read())
+    for m in data.get('data', []):
+        if str(m.get('id', '')) == model_id:
+            model_name = m.get('name', model_id)
+            break
+except: pass
+
+# Config setzen
+with open(config_path) as f: d = json.load(f)
+d['target_model_id'] = model_id
+with open(config_path, 'w') as f: json.dump(d, f, indent=4)
+print(f'✅ Modell gesetzt: {model_id} ({model_name})')
+
+# Kontext automatisch anpassen (aus model_context_map oder Modell-Info)
+context_map = d.get('model_context_map', {})
+new_ctx = context_map.get(str(model_id))
+if new_ctx is None and d.get('auto_adjust_context', False):
+    # Fallback: context_window vom Modell-Endpoint nutzen
+    try:
+        with urllib.request.urlopen(f'{owltrail_url}/v1/models', timeout=15) as r:
+            mdata = json.loads(r.read())
+        for m in mdata.get('data', []):
+            if str(m.get('id', '')) == model_id:
+                cw = m.get('context_window')
+                if isinstance(cw, int) and cw > 0:
+                    new_ctx = cw
+                break
+    except: pass
+
+if new_ctx and d.get('auto_adjust_context', False):
+    openclaw_paths = [
+        os.environ.get('OPENCLAW_CONFIG_PATH', ''),
+        os.path.expanduser('~/.openclaw/openclaw.json'),
+        os.path.expanduser('~/.config/openclaw-kibot/.openclaw/openclaw.json')
+    ]
+    updated = 0
+    for cp in openclaw_paths:
+        if not cp or not os.path.exists(cp): continue
+        try:
+            with open(cp) as f: cd = json.load(f)
+            for prov in cd.get('models',{}).get('providers',{}).values():
+                for mod in prov.get('models', []):
+                    mod['maxTokens'] = new_ctx
+                    mod['contextWindow'] = new_ctx
+            with open(cp, 'w') as f: json.dump(cd, f, indent=4)
+            updated += 1
+        except: pass
+    if new_ctx >= 1000000:
+        h = f'{new_ctx/1000000:.1f}M'
+    elif new_ctx >= 1000:
+        h = f'{new_ctx//1000}K'
+    else:
+        h = str(new_ctx)
+    if updated:
+        print(f'🔧 Kontext angepasst: {h} ({new_ctx:,} Tokens)')
+" "$MODEL" "$OWLTRAIL_URL"
+        fi
+        ;;
+
+    # --- Kontext ---
+    context)
+        shift
+        $BASE_DIR/ella-context "$@"
+        ;;
+
+    # --- Test ---
+    test)
+        $BASE_DIR/ella-owltrail test
+        ;;
+
+    # --- Direkte LLM-Anfrage ---
+    ""|--help|-h)
+        show_help
+        ;;
+
+    *)
+        # Alles andere = direkter Chat mit LLM
+        QUERY="$*"
+        echo -e "${CYAN}🤖 LLM denkt nach...${NC}"
+
+        ESCAPED_QUERY=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$QUERY")
+        RESPONSE=$(curl -s "$OWLTRAIL_URL/v1/chat/completions" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer owltrail-local" \
+            -d "{\"model\":\"auto\",\"messages\":[{\"role\":\"user\",\"content\":$ESCAPED_QUERY}]}" \
+            2>/dev/null)
+
+        if [ $? -eq 0 ] && [ -n "$RESPONSE" ]; then
+            echo "$RESPONSE" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    c = d.get('choices',[{}])[0].get('message',{}).get('content','')
+    if c:
+        print(f'\n🦉 {c}')
+    else:
+        err = d.get('error',{}).get('message','Keine Antwort')
+        print(f'❌ {err}')
+except Exception as e:
+    print(f'❌ Fehler: {e}')
+" 2>/dev/null
+        else
+            echo -e "${RED}❌ owltrail nicht erreichbar.${NC}"
+            echo "   Prüfe: ella owltrail status"
+        fi
+        ;;
+esac

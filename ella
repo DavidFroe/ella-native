@@ -6,7 +6,7 @@ COMMAND="$1"
 # 1. SMART DIRECT ASK (Nativ)
 if [[ "$COMMAND" != --* ]] && [ -n "$COMMAND" ]; then
     case "$COMMAND" in
-        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|sessions|tele|models|context|timeout|test-llm|version|channel|whatsapp|wa|telegram|tg|owltrail|openclaw|gateway|repair|quiteque|qq)
+        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|sessions|tele|models|context|timeout|test-llm|version|channel|whatsapp|wa|telegram|tg|owltrail|openclaw|gateway|repair|quiteque|qq|deepthink)
             COMMAND="--$COMMAND"
             ;;
         *)
@@ -172,6 +172,10 @@ case "$COMMAND" in
     --repair)
         chmod +x $BASE_DIR/ella-repair
         $BASE_DIR/ella-repair
+        ;;
+
+    --deepthink)
+        $BASE_DIR/ella-deepthink $PARAM
         ;;
 
     # --- GLOBETROTTER BACKUP & RESTORE ---

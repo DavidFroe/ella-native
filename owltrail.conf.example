@@ -1,0 +1,10 @@
+{
+  "server_ip": "192.168.188.20",
+  "quiteque_port": 7077,
+  "listen_port": 8081,
+  "username": "ella",
+  "model_id": "auto",
+  "timeout": 1800,
+  "active_profile": "full-local",
+  "openrouter_key": ""
+}
