@@ -97,37 +97,12 @@ case "$COMMAND" in
         fi
         rm -f "$GW_LOG"
         
-        # Start owlAPI
-        echo -ne "  🦉 Launching owlAPI...    "
-        if [ -x "$HOME/.local/bin/owl" ]; then
-            $HOME/.local/bin/owl server start 2>/dev/null | tail -1
-        else
-            echo -e "${YELLOW}SKIP (nicht installiert)${NC}"
-        fi
-
-        # Start QuiteQue
-        echo -ne "  🔀 Launching QuiteQue...  "
-        if [ -x "$HOME/apps/QuiteQue/qq" ]; then
-            $HOME/apps/QuiteQue/qq start 2>/dev/null | tail -1
-        else
-            echo -e "${YELLOW}SKIP (nicht installiert)${NC}"
-        fi
-
-        # Start owltrail (via CLI)
+        # Start owltrail (integrierte Bibliothek)
         echo -ne "  🦉 Launching owltrail... "
-        if [ -x "$OWLTRAIL_CLI" ]; then
-            $OWLTRAIL_CLI server start 2>/dev/null | tail -1
-        elif [ -f "$OWLTRAIL_BIN" ]; then
-            cd "$OWLTRAIL_DIR" && nohup ./venv/bin/python3 owltrail_server.py > /dev/null 2>&1 &
-            sleep 1
-            pgrep -f "owltrail_server" >/dev/null && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAILED${NC}"
+        if [ -f "$OWLTRAIL_RUNNER" ]; then
+            bash "$BASE_DIR/ella-owltrail" start 2>/dev/null | tail -1
         else
-            echo -e "${YELLOW}SKIP (nicht installiert)${NC}"
-        fi
-
-        # Model-Check im Hintergrund (frische Status-Daten)
-        if [ -x "$HOME/.local/bin/owl" ]; then
-            $HOME/.local/bin/owl check-all > /dev/null 2>&1 &
+            echo -e "${YELLOW}SKIP (owltrail.py nicht gefunden)${NC}"
         fi
 
         echo -e "${GREY}-----------------------------------------${NC}"
@@ -137,17 +112,7 @@ case "$COMMAND" in
     --stop)
         echo -e "${YELLOW}🛑 Stopping Ella Components...${NC}"
         $OPENCLAW_BIN gateway stop > /dev/null 2>&1 || pkill -f "openclaw gateway" 2>/dev/null || true
-        if [ -x "$OWLTRAIL_CLI" ]; then
-            $OWLTRAIL_CLI server stop 2>/dev/null
-        else
-            pkill -f "owltrail_server" 2>/dev/null || true
-        fi
-        if [ -x "$HOME/apps/QuiteQue/qq" ]; then
-            $HOME/apps/QuiteQue/qq stop 2>/dev/null | tail -1 || true
-        fi
-        if [ -x "$HOME/.local/bin/owl" ]; then
-            $HOME/.local/bin/owl server stop 2>/dev/null | tail -1 || true
-        fi
+        bash "$BASE_DIR/ella-owltrail" stop 2>/dev/null || true
         echo -e "${GREEN}Cleaned up all processes.${NC}"
         ;;
 

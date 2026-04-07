@@ -235,6 +235,21 @@ else
     fi
 fi
 
+# Gateway-Service einrichten (einmalig nötig)
+echo -e "\n${CYAN}🛰️  6b. OpenClaw Gateway einrichten...${NC}"
+if command -v openclaw &>/dev/null; then
+    GW_STATUS=$(openclaw gateway status 2>&1 || true)
+    if echo "$GW_STATUS" | grep -qi "disabled\|not installed\|not found\|install"; then
+        echo -e "   ${CYAN}Richte openclaw Gateway-Service ein...${NC}"
+        openclaw gateway install 2>&1 | tail -5
+        echo -e "   ${GREEN}✅ Gateway-Service eingerichtet.${NC}"
+    else
+        echo -e "   ${GREEN}✅ Gateway-Service bereits eingerichtet.${NC}"
+    fi
+else
+    echo -e "   ${GREY}openclaw nicht verfügbar — Gateway-Setup übersprungen.${NC}"
+fi
+
 # ---------------------------------------------------------------
 # 7. OWLTRAIL KONFIGURIEREN
 # ---------------------------------------------------------------
