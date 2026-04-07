@@ -178,9 +178,34 @@ EOJSON
 fi
 
 # ---------------------------------------------------------------
-# 5. OPENCLAW INSTALLIEREN (falls fehlt)
+# 5. NODE.JS >= 22 SICHERSTELLEN (openclaw-Voraussetzung)
 # ---------------------------------------------------------------
-echo -e "\n${CYAN}🐾 5. OpenClaw prüfen...${NC}"
+echo -e "\n${CYAN}⬡  5. Node.js prüfen...${NC}"
+NODE_OK=false
+if command -v node &>/dev/null; then
+    NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
+    if [ "${NODE_MAJOR:-0}" -ge 22 ] 2>/dev/null; then
+        echo -e "   ${GREEN}✅ Node.js $(node --version) vorhanden.${NC}"
+        NODE_OK=true
+    else
+        echo -e "   ${YELLOW}⚠️  Node.js $(node --version) zu alt (benötigt: v22+).${NC}"
+    fi
+else
+    echo -e "   ${YELLOW}⚠️  Node.js nicht gefunden.${NC}"
+fi
+
+if [ "$NODE_OK" = false ]; then
+    echo -e "   ${CYAN}Installiere Node.js 22 via NodeSource...${NC}"
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - 2>&1 | grep -E '(error|warn|OK)' || true
+    sudo apt-get install -y nodejs -qq
+    NODE_VER=$(node --version 2>/dev/null)
+    echo -e "   ${GREEN}✅ Node.js ${NODE_VER} installiert.${NC}"
+fi
+
+# ---------------------------------------------------------------
+# 6. OPENCLAW INSTALLIEREN (falls fehlt)
+# ---------------------------------------------------------------
+echo -e "\n${CYAN}🐾 6. OpenClaw prüfen...${NC}"
 if command -v openclaw &>/dev/null; then
     OC_VER=$(openclaw --version 2>/dev/null | head -1)
     echo -e "   ${GREEN}✅ openclaw vorhanden: ${OC_VER}${NC}"
@@ -211,9 +236,9 @@ else
 fi
 
 # ---------------------------------------------------------------
-# 6. OWLTRAIL KONFIGURIEREN
+# 7. OWLTRAIL KONFIGURIEREN
 # ---------------------------------------------------------------
-echo -e "\n${CYAN}🦉 6. owltrail Konfiguration...${NC}"
+echo -e "\n${CYAN}🦉 7. owltrail Konfiguration...${NC}"
 OWLTRAIL_CONF="$BASE_DIR/owltrail.conf"
 
 if [ -f "$OWLTRAIL_CONF" ]; then
@@ -269,7 +294,7 @@ else
 fi
 
 # ---------------------------------------------------------------
-# 7. ELLA.CONF
+# 8. ELLA.CONF
 # ---------------------------------------------------------------
 if [ ! -f "$BASE_DIR/ella.conf" ]; then
     echo "OWLTRAIL_PORT=${OWL_PORT:-8081}" > "$BASE_DIR/ella.conf"
