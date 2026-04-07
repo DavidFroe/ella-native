@@ -116,30 +116,42 @@ try:
         all_models = []
 
     if all_models:
+        by_id = {str(m.get('id','')): m for m in all_models}
         print()
-        # Erstes verfügbares Modell hervorheben
-        BAD = ('ERROR','OFFLINE','FEHLER','RATE_LIMIT','IDLE','TIMEOUT')
-        def usable(m):
-            s = (m.get('check_status') or m.get('status') or '').upper()
-            return not any(k in s for k in BAD)
-
-        available = [m for m in all_models if usable(m)]
-        if available:
-            top  = available[0]
-            mid  = str(top.get('id','?'))
-            name = top.get('name', mid)
-            ctx  = fmt_ctx(top.get('context_window'))
-            st   = top.get('check_status') or top.get('status') or 'OK'
-            sc   = status_color(st)
-            print(f'  {BOLD}► QuiteQue wählt:{R} {MAG}{BOLD}{name}{R}  {GREY}[{mid}]{R}  Ctx {CYAN}{ctx}{R}  {sc}{st}{R}')
-            for fb in available[1:3]:
-                fid  = str(fb.get('id','?'))
-                fn   = fb.get('name', fid)
-                fctx = fmt_ctx(fb.get('context_window'))
-                fst  = fb.get('check_status') or fb.get('status') or 'OK'
-                print(f'    {GREY}· {fn}  [{fid}]  Ctx {fctx}  {fst}{R}')
+        if model_id == 'auto':
+            # Auto-Modus: zeige was QuiteQue als erstes wählen würde
+            BAD = ('ERROR','OFFLINE','FEHLER','RATE_LIMIT','IDLE','TIMEOUT','ZUGRIFF')
+            def usable(m):
+                s = (m.get('check_status') or m.get('status') or '').upper()
+                return not any(k in s for k in BAD)
+            available = [m for m in all_models if usable(m)]
+            if available:
+                top  = available[0]
+                mid  = str(top.get('id','?'))
+                name = top.get('name', mid)
+                ctx  = fmt_ctx(top.get('context_window'))
+                st   = top.get('check_status') or top.get('status') or 'OK'
+                sc   = status_color(st)
+                print(f'  {BOLD}► QuiteQue wählt:{R} {MAG}{BOLD}{name}{R}  {GREY}[{mid}]{R}  Ctx {CYAN}{ctx}{R}  {sc}{st}{R}')
+                for fb in available[1:3]:
+                    fid  = str(fb.get('id','?'))
+                    fn   = fb.get('name', fid)
+                    fctx = fmt_ctx(fb.get('context_window'))
+                    fst  = fb.get('check_status') or fb.get('status') or 'OK'
+                    print(f'    {GREY}· {fn}  [{fid}]  Ctx {fctx}  {fst}{R}')
+            else:
+                print(f'  {RED}⚠ Keine verfügbaren Modelle!{R}')
         else:
-            print(f'  {RED}⚠ Keine verfügbaren Modelle!{R}')
+            # Festes Modell: zeige genau dieses Modell
+            m = by_id.get(model_id)
+            if m:
+                name = m.get('name', model_id)
+                ctx  = fmt_ctx(m.get('context_window'))
+                st   = m.get('check_status') or m.get('status') or 'OK'
+                sc   = status_color(st)
+                print(f'  {BOLD}► Aktiv:{R} {MAG}{BOLD}{name}{R}  {GREY}[{model_id}]{R}  Ctx {CYAN}{ctx}{R}  {sc}{st}{R}')
+            else:
+                print(f'  {BOLD}► Aktiv:{R} {MAG}{model_id}{R}  {GREY}(nicht in Modellliste){R}')
     else:
         print(f'  {YELLOW}owltrail nicht erreichbar — starte mit: ella owltrail start{R}')
 
