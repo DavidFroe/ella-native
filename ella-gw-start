@@ -1,5 +1,6 @@
 #!/bin/bash
-source /home/ella/apps/ella-native/ella-core
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source "$BASE_DIR/ella-core"
 
 # --- ELLA-PI MASTER LAUNCHER ---
 echo -e "${BLUE}🚀 ELLA-PI: Brute-Force Startup (v10.0)${NC}"
@@ -19,17 +20,7 @@ echo -ne "  🚀 Launching OpenClaw Gateway... "
 nohup $OPENCLAW_BIN gateway --force --bind 0.0.0.0 > "$HOME/.ella_gw.log" 2>&1 &
 sleep 2
 
-# 4. OWLTRAIL PROXY (via CLI)
-if [ -x "$OWLTRAIL_CLI" ]; then
-    echo -ne "  🦉 Launching owltrail Proxy...   "
-    $OWLTRAIL_CLI server start 2>/dev/null | tail -1
-elif [ -f "$OWLTRAIL_BIN" ]; then
-    echo -ne "  🦉 Launching owltrail Proxy...   "
-    cd "$OWLTRAIL_DIR" && nohup ./venv/bin/python3 owltrail_server.py > "$HOME/.ella_owltrail.log" 2>&1 &
-    sleep 1
-fi
-
-# 5. HEALTH CHECK LOOP
+# 4. HEALTH CHECK LOOP
 echo -ne "  🏥 Waiting for Sync... "
 MAX_RETRY=15
 for ((i=1; i<=MAX_RETRY; i++)); do
