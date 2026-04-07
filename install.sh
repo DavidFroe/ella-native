@@ -20,7 +20,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # 1. SYSTEM-ABHÄNGIGKEITEN
 # ---------------------------------------------------------------
 echo -e "\n${CYAN}📦 1. System-Abhängigkeiten prüfen...${NC}"
-DEPS="procps psmisc htop curl python3 python3-venv jq"
+DEPS="procps psmisc htop curl python3 python3-venv jq nodejs npm"
 MISSING=""
 for dep in $DEPS; do
     if ! dpkg -s "$dep" &>/dev/null; then
@@ -178,22 +178,107 @@ EOJSON
 fi
 
 # ---------------------------------------------------------------
-# 5. OWLTRAIL INSTALLIEREN
+# 5. OPENCLAW INSTALLIEREN (falls fehlt)
 # ---------------------------------------------------------------
-echo -e "\n${CYAN}🦉 5. owltrail Proxy prüfen...${NC}"
-OWLTRAIL_DIR="$(dirname "$BASE_DIR")/owltrail"
-if [ -d "$OWLTRAIL_DIR" ] && [ -f "$OWLTRAIL_DIR/install.sh" ]; then
-    echo -n "   owltrail gefunden. Installieren? [J/n]: "
-    read -r INSTALL_OWL
-    if [[ ! "$INSTALL_OWL" =~ ^[nN]$ ]]; then
-        bash "$OWLTRAIL_DIR/install.sh"
-    fi
+echo -e "\n${CYAN}🐾 5. OpenClaw prüfen...${NC}"
+if command -v openclaw &>/dev/null; then
+    OC_VER=$(openclaw --version 2>/dev/null | head -1)
+    echo -e "   ${GREEN}✅ openclaw vorhanden: ${OC_VER}${NC}"
 else
-    echo -e "   ${GREY}owltrail nicht gefunden ($OWLTRAIL_DIR). Überspringe.${NC}"
+    echo -e "   ${YELLOW}⚠️  openclaw nicht gefunden.${NC}"
+    echo -n "   openclaw via npm installieren? [J/n]: "
+    read -r INSTALL_OC
+    if [[ ! "$INSTALL_OC" =~ ^[nN]$ ]]; then
+        # npm global prefix sicherstellen (kein sudo nötig)
+        NPM_PREFIX="$HOME/.npm-global"
+        mkdir -p "$NPM_PREFIX"
+        npm config set prefix "$NPM_PREFIX" 2>/dev/null || true
+
+        # PATH für aktuelle Session
+        export PATH="$NPM_PREFIX/bin:$PATH"
+
+        echo -e "   ${CYAN}Installiere openclaw@latest ...${NC}"
+        npm install -g openclaw 2>&1 | tail -3
+
+        if command -v openclaw &>/dev/null; then
+            echo -e "   ${GREEN}✅ openclaw installiert.${NC}"
+            # Stelle sicher, dass PATH dauerhaft gesetzt ist
+            PROFILE="$HOME/.bashrc"
+            if ! grep -q 'npm-global/bin' "$PROFILE" 2>/dev/null; then
+                echo "" >> "$PROFILE"
+                echo "# npm global binaries (openclaw etc.)" >> "$PROFILE"
+                echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> "$PROFILE"
+                echo -e "   ${GREY}PATH in $PROFILE eingetragen.${NC}"
+            fi
+        else
+            echo -e "   ${RED}❌ openclaw Installation fehlgeschlagen.${NC}"
+            echo -e "   ${GREY}   Manuell: npm install -g openclaw${NC}"
+        fi
+    else
+        echo -e "   ${GREY}openclaw übersprungen — kann später nachinstalliert werden.${NC}"
+    fi
 fi
 
 # ---------------------------------------------------------------
-# 6. ELLA.CONF
+# 6. OWLTRAIL KONFIGURIEREN
+# ---------------------------------------------------------------
+echo -e "\n${CYAN}🦉 6. owltrail Konfiguration...${NC}"
+OWLTRAIL_CONF="$BASE_DIR/owltrail.conf"
+
+if [ -f "$OWLTRAIL_CONF" ]; then
+    echo -e "   ${YELLOW}⚠️  Bestehende owltrail.conf gefunden.${NC}"
+    echo -n "   Beibehalten? [J/n]: "
+    read -r KEEP_OWL
+    if [[ "$KEEP_OWL" =~ ^[nN]$ ]]; then
+        rm -f "$OWLTRAIL_CONF"
+    fi
+fi
+
+if [ ! -f "$OWLTRAIL_CONF" ]; then
+    echo -e "\n   ${BOLD}🔧 owltrail Verbindung konfigurieren:${NC}"
+
+    echo -n "   QuiteQue Server-IP   [192.168.188.20]: "
+    read -r OWL_SRV_IP
+    OWL_SRV_IP="${OWL_SRV_IP:-192.168.188.20}"
+
+    echo -n "   QuiteQue Port        [7077]: "
+    read -r OWL_QQ_PORT
+    OWL_QQ_PORT="${OWL_QQ_PORT:-7077}"
+
+    echo -n "   owltrail Listen-Port [${OWL_PORT:-8081}]: "
+    read -r OWL_LISTEN
+    OWL_LISTEN="${OWL_LISTEN:-${OWL_PORT:-8081}}"
+
+    echo -n "   Benutzername (für QuiteQue-Priorisierung) [ella]: "
+    read -r OWL_USER
+    OWL_USER="${OWL_USER:-ella}"
+
+    cat > "$OWLTRAIL_CONF" << EOWL
+{
+  "server_ip": "${OWL_SRV_IP}",
+  "quiteque_port": ${OWL_QQ_PORT},
+  "listen_port": ${OWL_LISTEN},
+  "username": "${OWL_USER}",
+  "model_id": "auto",
+  "timeout": 1800
+}
+EOWL
+
+    # openclaw-Configs ebenfalls auf den gewählten Port anpassen
+    OWL_PORT="$OWL_LISTEN"
+
+    echo -e "   ${GREEN}✅ owltrail.conf erstellt.${NC}"
+fi
+
+# owltrail Bibliothek prüfen
+if [ -f "$BASE_DIR/owltrail.py" ]; then
+    echo -e "   ${GREEN}✅ owltrail.py (Bibliothek) vorhanden.${NC}"
+else
+    echo -e "   ${RED}❌ owltrail.py fehlt in $BASE_DIR — bitte Repository neu klonen.${NC}"
+fi
+
+# ---------------------------------------------------------------
+# 7. ELLA.CONF
 # ---------------------------------------------------------------
 if [ ! -f "$BASE_DIR/ella.conf" ]; then
     echo "OWLTRAIL_PORT=${OWL_PORT:-8081}" > "$BASE_DIR/ella.conf"
@@ -207,8 +292,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${GREEN}${BOLD}✅ ELLA-PI Installation abgeschlossen!${NC}"
 echo ""
 echo -e "Nächste Schritte:"
+echo -e "  ${CYAN}ella owltrail start${NC}  owltrail Proxy starten"
+echo -e "  ${CYAN}ella owltrail test${NC}   Verbindung zu QuiteQue testen"
 echo -e "  ${CYAN}ella start${NC}           Ella-Pi starten"
 echo -e "  ${CYAN}ella status${NC}          Status prüfen"
 echo -e "  ${CYAN}ella help${NC}            Alle Befehle"
-echo -e "  ${CYAN}ella owltrail test${NC}   owltrail testen"
 echo ""

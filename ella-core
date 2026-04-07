@@ -15,10 +15,14 @@ export GATEWAY_PORT=18789
 export OWLTRAIL_PORT=8081
 
 # Automatische Pfad-Erkennung für native Binaries
-export OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "/usr/local/bin/openclaw")
-export OWLTRAIL_DIR="$(dirname "$BASE_DIR")/owltrail"
-export OWLTRAIL_BIN="$OWLTRAIL_DIR/owltrail_server.py"
-export OWLTRAIL_CLI="$OWLTRAIL_DIR/owltrail"
+export OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "$HOME/.npm-global/bin/openclaw")
+
+# owltrail: integrierte Bibliothek (kein externer Server mehr)
+export OWLTRAIL_PY="$BASE_DIR/owltrail.py"
+export OWLTRAIL_RUNNER="$BASE_DIR/ella-owltrail-runner.py"
+export OWLTRAIL_CONF="${OWLTRAIL_CONF:-$BASE_DIR/owltrail.conf}"
+export OWLTRAIL_LOG="$HOME/.ella_owltrail.log"
+export OWLTRAIL_PID="$HOME/.ella_owltrail.pid"
 
 # --- PERMISSION & TOKEN INITIALIZATION ---
 fix_permissions() {

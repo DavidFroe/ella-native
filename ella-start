@@ -68,11 +68,9 @@ if [ -x "$HOME/apps/QuiteQue/qq" ]; then
     $HOME/apps/QuiteQue/qq start 2>/dev/null | tail -1
 fi
 
-OWLTRAIL_DIR="$HOME/apps/owltrail"
-OWLTRAIL_CLI="$OWLTRAIL_DIR/owltrail"
-if [ -x "$OWLTRAIL_CLI" ]; then
+if [ -f "$OWLTRAIL_RUNNER" ]; then
     echo -ne "  🦉 owltrail...    "
-    $OWLTRAIL_CLI server start 2>/dev/null | tail -1
+    bash "$BASE_DIR/ella-owltrail" start 2>/dev/null | tail -1
 fi
 
 # 6. MODEL CHECK (owlAPI braucht frische Status-Daten nach Reboot)

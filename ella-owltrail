@@ -1,85 +1,231 @@
 #!/bin/bash
 # ================================================================
-# ELLA owltrail Wrapper — Steuert owltrail + LLM-Einstellungen
+# ELLA owltrail Wrapper — Steuert owltrail-Proxy + LLM-Einstellungen
+#
+# owltrail.py läuft als lokaler Daemon (integrierte Bibliothek).
+# Kommuniziert via QuiteQue mit lokalen LLMs.
 # ================================================================
 BASE_DIR=$(dirname "$(readlink -f "$0")")
-source $BASE_DIR/ella-core
+source "$BASE_DIR/ella-core"
 
-CMD="$1"
+CMD="${1:-status}"
 shift 2>/dev/null
 
-if [ -z "$CMD" ]; then
-    CMD="status"
-fi
+# ── Hilfsfunktionen ──────────────────────────────────────────────
 
-# Prüfe ob owltrail installiert ist (außer bei model/context/timeout)
+_pid_running() {
+    [ -f "$OWLTRAIL_PID" ] || return 1
+    local pid; pid=$(head -1 "$OWLTRAIL_PID" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+_get_port() {
+    [ -f "$OWLTRAIL_PID" ] && sed -n '2p' "$OWLTRAIL_PID" 2>/dev/null
+}
+
+_get_pid() {
+    [ -f "$OWLTRAIL_PID" ] && head -1 "$OWLTRAIL_PID" 2>/dev/null
+}
+
+_http_ok() {
+    local port="${1:-$(_get_port)}"
+    [ -z "$port" ] && return 1
+    curl -sf --max-time 2 "http://127.0.0.1:${port}/v1/models" > /dev/null 2>&1
+}
+
+# ── Befehle ──────────────────────────────────────────────────────
+
 case "$CMD" in
-    model|models|context|timeout) ;;
-    *)
-        if [ ! -x "$OWLTRAIL_CLI" ]; then
-            echo -e "${RED}❌ owltrail CLI nicht gefunden: $OWLTRAIL_CLI${NC}"
-            echo -e "${GREY}   Installiere owltrail: cd $OWLTRAIL_DIR && ./install.sh${NC}"
+
+    start)
+        if _pid_running; then
+            PORT=$(_get_port)
+            echo -e "${GREEN}✅ owltrail läuft bereits (PID $(_get_pid), Port ${PORT:-?})${NC}"
+            exit 0
+        fi
+        rm -f "$OWLTRAIL_PID"
+
+        if [ ! -f "$OWLTRAIL_CONF" ]; then
+            echo -e "${RED}❌ owltrail.conf nicht gefunden: $OWLTRAIL_CONF${NC}"
+            echo -e "${GREY}   Erstelle mit: ella owltrail setup${NC}"
+            exit 1
+        fi
+
+        echo -e "${CYAN}🦉 Starte owltrail Proxy...${NC}"
+        nohup python3 "$OWLTRAIL_RUNNER" \
+            --conf "$OWLTRAIL_CONF" \
+            --log  "$OWLTRAIL_LOG"  \
+            --pid  "$OWLTRAIL_PID"  \
+            >> "$OWLTRAIL_LOG" 2>&1 &
+
+        # Warte bis PID-Datei erscheint (max. 5 s)
+        for i in 1 2 3 4 5; do
+            sleep 1
+            [ -f "$OWLTRAIL_PID" ] && break
+        done
+
+        if _pid_running; then
+            PORT=$(_get_port)
+            echo -e "${GREEN}✅ owltrail gestartet (PID $(_get_pid), Port ${PORT:-?})${NC}"
+        else
+            echo -e "${RED}❌ owltrail konnte nicht gestartet werden — siehe: $OWLTRAIL_LOG${NC}"
             exit 1
         fi
         ;;
-esac
 
-case "$CMD" in
-    status)  $OWLTRAIL_CLI server status ;;
-    start)   $OWLTRAIL_CLI server start ;;
-    stop)    $OWLTRAIL_CLI server stop ;;
-    restart) $OWLTRAIL_CLI server restart ;;
-    log)     $OWLTRAIL_CLI server log ;;
-    test)    $OWLTRAIL_CLI server test ;;
-
-    # --- Modelle (owltrail-Sicht) ---
-    models)
-        bash $BASE_DIR/ella-llm models
+    stop)
+        if ! _pid_running; then
+            echo -e "${YELLOW}⚠️  owltrail läuft nicht.${NC}"
+            rm -f "$OWLTRAIL_PID"
+            exit 0
+        fi
+        PID=$(_get_pid)
+        kill "$PID" 2>/dev/null
+        sleep 1
+        if kill -0 "$PID" 2>/dev/null; then
+            kill -9 "$PID" 2>/dev/null
+        fi
+        rm -f "$OWLTRAIL_PID"
+        echo -e "${GREEN}✅ owltrail gestoppt (PID $PID).${NC}"
         ;;
 
-    # --- Aktives Modell anzeigen / setzen ---
+    restart)
+        "$BASE_DIR/ella-owltrail" stop
+        sleep 1
+        "$BASE_DIR/ella-owltrail" start
+        ;;
+
+    status)
+        echo -e "${BLUE}${BOLD}🦉 owltrail Status${NC}"
+        if _pid_running; then
+            PORT=$(_get_port)
+            PID=$(_get_pid)
+            echo -e "   Prozess: ${GREEN}AKTIV${NC} (PID ${PID}, Port ${PORT:-?})"
+            if _http_ok "$PORT"; then
+                echo -e "   HTTP:    ${GREEN}OK${NC}  → http://127.0.0.1:${PORT}/v1"
+            else
+                echo -e "   HTTP:    ${YELLOW}noch nicht bereit${NC}"
+            fi
+            # Config-Info
+            if [ -f "$OWLTRAIL_CONF" ]; then
+                SRV=$(python3 -c "import json; c=json.load(open('$OWLTRAIL_CONF')); print(c.get('server_ip','?')+':'+str(c.get('quiteque_port','?')))" 2>/dev/null)
+                USR=$(python3 -c "import json; c=json.load(open('$OWLTRAIL_CONF')); print(c.get('username','?'))" 2>/dev/null)
+                echo -e "   QuiteQue: ${GREY}${SRV}${NC}   User: ${GREY}${USR}${NC}"
+            fi
+        else
+            echo -e "   Prozess: ${RED}NICHT AKTIV${NC}"
+            rm -f "$OWLTRAIL_PID"
+        fi
+        ;;
+
+    log)
+        if [ -f "$OWLTRAIL_LOG" ]; then
+            tail -f "$OWLTRAIL_LOG"
+        else
+            echo -e "${GREY}Noch kein Log vorhanden: $OWLTRAIL_LOG${NC}"
+        fi
+        ;;
+
+    test)
+        PORT=$(_get_port)
+        if [ -z "$PORT" ]; then
+            echo -e "${RED}❌ owltrail läuft nicht (kein Port bekannt).${NC}"
+            exit 1
+        fi
+        echo -e "${CYAN}🧪 Sende Testanfrage an http://127.0.0.1:${PORT}/v1/models ...${NC}"
+        RESP=$(curl -sf --max-time 5 "http://127.0.0.1:${PORT}/v1/models" 2>&1)
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✅ owltrail antwortet:${NC}"
+            echo "$RESP" | python3 -m json.tool 2>/dev/null || echo "$RESP"
+        else
+            echo -e "${RED}❌ Keine Antwort — Log prüfen: ella owltrail log${NC}"
+            exit 1
+        fi
+        ;;
+
+    setup)
+        # Interaktives Erstellen der owltrail.conf
+        echo -e "${BLUE}${BOLD}🦉 owltrail Setup${NC}"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+        if [ -f "$OWLTRAIL_CONF" ]; then
+            echo -e "${YELLOW}⚠️  Bestehende Konfiguration gefunden: $OWLTRAIL_CONF${NC}"
+            echo -n "   Überschreiben? [j/N]: "
+            read -r OVERWRITE
+            [[ "$OVERWRITE" =~ ^[jJ]$ ]] || { echo "Abgebrochen."; exit 0; }
+        fi
+
+        echo -n "   QuiteQue Server IP   [192.168.188.20]: "; read -r SRV_IP
+        SRV_IP="${SRV_IP:-192.168.188.20}"
+        echo -n "   QuiteQue Port        [7077]: "; read -r QQ_PORT
+        QQ_PORT="${QQ_PORT:-7077}"
+        echo -n "   owltrail Listen-Port [8081]: "; read -r LSN_PORT
+        LSN_PORT="${LSN_PORT:-8081}"
+        echo -n "   Benutzername         [ella]: "; read -r UNAME
+        UNAME="${UNAME:-ella}"
+
+        cat > "$OWLTRAIL_CONF" << EOCONF
+{
+  "server_ip": "${SRV_IP}",
+  "quiteque_port": ${QQ_PORT},
+  "listen_port": ${LSN_PORT},
+  "username": "${UNAME}",
+  "model_id": "auto",
+  "timeout": 1800
+}
+EOCONF
+        echo -e "${GREEN}✅ owltrail.conf erstellt: $OWLTRAIL_CONF${NC}"
+        echo -e "${GREY}   ella owltrail start   — Proxy starten${NC}"
+        ;;
+
+    # --- Modelle ---
+    models)
+        bash "$BASE_DIR/ella-llm" models
+        ;;
+
     model)
-        bash $BASE_DIR/ella-llm model "$@"
+        bash "$BASE_DIR/ella-llm" model "$@"
         ;;
 
     # --- Kontextfenster ---
     context)
-        chmod +x $BASE_DIR/ella-context
-        $BASE_DIR/ella-context "$@"
+        chmod +x "$BASE_DIR/ella-context"
+        "$BASE_DIR/ella-context" "$@"
         ;;
 
     # --- Timeout ---
     timeout)
-        chmod +x $BASE_DIR/ella-timeout
-        $BASE_DIR/ella-timeout "$@"
+        chmod +x "$BASE_DIR/ella-timeout"
+        "$BASE_DIR/ella-timeout" "$@"
         ;;
 
-    # --- Direkt-Chat (ohne OpenClaw-Agent) ---
+    # --- Direkt-Chat ---
     chat|ask)
-        bash $BASE_DIR/ella-llm "$@"
+        bash "$BASE_DIR/ella-llm" "$@"
         ;;
 
-    ""|--help|-h)
+    --help|-h|"")
         echo -e "${BLUE}${BOLD}🦉 ELLA owltrail — Proxy & LLM${NC}"
         echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo -e "${BOLD}Server:${NC}"
-        echo -e "  ${GREEN}ella owltrail status${NC}          Server-Status & owlAPI-Verbindung"
-        echo -e "  ${GREEN}ella owltrail start${NC}           Server starten"
-        echo -e "  ${GREEN}ella owltrail stop${NC}            Server stoppen"
+        echo -e "  ${GREEN}ella owltrail status${NC}          Status & QuiteQue-Verbindung"
+        echo -e "  ${GREEN}ella owltrail start${NC}           Proxy starten"
+        echo -e "  ${GREEN}ella owltrail stop${NC}            Proxy stoppen"
         echo -e "  ${GREEN}ella owltrail restart${NC}         Neustart"
         echo -e "  ${GREEN}ella owltrail log${NC}             Live-Log anzeigen"
-        echo -e "  ${GREEN}ella owltrail test${NC}            Integrationstest (owlAPI + Inferenz)"
+        echo -e "  ${GREEN}ella owltrail test${NC}            HTTP-Test gegen lokalen Proxy"
+        echo -e "  ${GREEN}ella owltrail setup${NC}           owltrail.conf interaktiv erstellen"
         echo -e "${BOLD}Modell & Einstellungen:${NC}"
-        echo -e "  ${GREEN}ella owltrail models${NC}          Verfügbare Modelle anzeigen"
-        echo -e "  ${GREEN}ella owltrail model${NC}           Aktuelles Modell anzeigen"
-        echo -e "  ${GREEN}ella owltrail model <id>${NC}      Modell setzen (in owltrail config)"
-        echo -e "  ${GREEN}ella owltrail context show${NC}    Kontext-Größe anzeigen"
+        echo -e "  ${GREEN}ella owltrail models${NC}          Verfügbare Modelle"
+        echo -e "  ${GREEN}ella owltrail model${NC}           Aktuelles Modell"
+        echo -e "  ${GREEN}ella owltrail model <id>${NC}      Modell setzen"
+        echo -e "  ${GREEN}ella owltrail context show${NC}    Kontext-Größe"
         echo -e "  ${GREEN}ella owltrail context max${NC}     Maximum setzen"
         echo -e "  ${GREEN}ella owltrail context 32K${NC}     32.000 Tokens setzen"
-        echo -e "  ${GREEN}ella owltrail timeout show${NC}    Timeout anzeigen"
         echo -e "  ${GREEN}ella owltrail timeout <sek>${NC}   Timeout setzen"
-        echo -e "${BOLD}Direkt-Chat (kein Agent):${NC}"
+        echo -e "${BOLD}Direkt-Chat:${NC}"
         echo -e "  ${GREEN}ella owltrail chat \"text\"${NC}     Direkt mit LLM reden"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         ;;
 
     *)
