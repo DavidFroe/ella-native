@@ -20,7 +20,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # 1. SYSTEM-ABHÄNGIGKEITEN
 # ---------------------------------------------------------------
 echo -e "\n${CYAN}📦 1. System-Abhängigkeiten prüfen...${NC}"
-DEPS="procps psmisc htop curl python3 python3-venv jq nodejs npm"
+DEPS="procps psmisc htop curl python3 python3-venv jq"
 MISSING=""
 for dep in $DEPS; do
     if ! dpkg -s "$dep" &>/dev/null; then
@@ -186,36 +186,27 @@ if command -v openclaw &>/dev/null; then
     echo -e "   ${GREEN}✅ openclaw vorhanden: ${OC_VER}${NC}"
 else
     echo -e "   ${YELLOW}⚠️  openclaw nicht gefunden.${NC}"
-    echo -n "   openclaw via npm installieren? [J/n]: "
+    echo -n "   openclaw installieren? [J/n]: "
     read -r INSTALL_OC
     if [[ ! "$INSTALL_OC" =~ ^[nN]$ ]]; then
-        # npm global prefix sicherstellen (kein sudo nötig)
-        NPM_PREFIX="$HOME/.npm-global"
-        mkdir -p "$NPM_PREFIX"
-        npm config set prefix "$NPM_PREFIX" 2>/dev/null || true
-
-        # PATH für aktuelle Session
-        export PATH="$NPM_PREFIX/bin:$PATH"
-
-        echo -e "   ${CYAN}Installiere openclaw@latest ...${NC}"
-        npm install -g openclaw 2>&1 | tail -3
-
-        if command -v openclaw &>/dev/null; then
-            echo -e "   ${GREEN}✅ openclaw installiert.${NC}"
-            # Stelle sicher, dass PATH dauerhaft gesetzt ist
-            PROFILE="$HOME/.bashrc"
-            if ! grep -q 'npm-global/bin' "$PROFILE" 2>/dev/null; then
-                echo "" >> "$PROFILE"
-                echo "# npm global binaries (openclaw etc.)" >> "$PROFILE"
-                echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >> "$PROFILE"
-                echo -e "   ${GREY}PATH in $PROFILE eingetragen.${NC}"
+        echo -e "   ${CYAN}Installiere openclaw (offizieller Installer)...${NC}"
+        if curl -fsSL https://openclaw.ai/install.sh | bash; then
+            # Installer legt binary meist in ~/.local/bin oder /usr/local/bin
+            # PATH für aktuelle Session aktualisieren
+            export PATH="$HOME/.local/bin:$PATH"
+            if command -v openclaw &>/dev/null; then
+                OC_VER=$(openclaw --version 2>/dev/null | head -1)
+                echo -e "   ${GREEN}✅ openclaw installiert: ${OC_VER}${NC}"
+            else
+                echo -e "   ${YELLOW}⚠️  openclaw installiert — bitte Shell neu starten oder 'source ~/.bashrc'.${NC}"
             fi
         else
             echo -e "   ${RED}❌ openclaw Installation fehlgeschlagen.${NC}"
-            echo -e "   ${GREY}   Manuell: npm install -g openclaw${NC}"
+            echo -e "   ${GREY}   Manuell: curl -fsSL https://openclaw.ai/install.sh | bash${NC}"
         fi
     else
-        echo -e "   ${GREY}openclaw übersprungen — kann später nachinstalliert werden.${NC}"
+        echo -e "   ${GREY}openclaw übersprungen — kann später nachinstalliert werden:${NC}"
+        echo -e "   ${GREY}   curl -fsSL https://openclaw.ai/install.sh | bash${NC}"
     fi
 fi
 
