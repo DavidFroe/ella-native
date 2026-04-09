@@ -17,6 +17,9 @@ show_menu() {
     echo -e "  ${CYAN}[5]${NC} owltrail Provider (custom-localhost) reparieren"
     echo -e "  ${CYAN}[6]${NC} Konfiguration wiederherstellen (Reset Configs)"
     echo -e "  ${CYAN}[7]${NC} Full System Reset (ella --reset-full)"
+    echo -e "  ${CYAN}[8]${NC} OpenClaw Diagnose (ella openclaw diagnose)"
+    echo -e "  ${CYAN}[9]${NC} OpenClaw Hard-Fix (ella openclaw fix hard)"
+    echo -e "  ${CYAN}[u]${NC} OpenClaw Update (npm)"
     echo -e "  ${CYAN}[q]${NC} Abbrechen"
     echo -ne "\nOption: "
 }
@@ -115,6 +118,9 @@ while true; do
         5) fix_owltrail_provider ;;
         6) restore_config ;;
         7) $BASE_DIR/ella --reset-full; exit 0 ;;
+        8) bash $BASE_DIR/ella-openclaw diagnose ;;
+        9) bash $BASE_DIR/ella-openclaw fix hard ;;
+        u|U) bash $BASE_DIR/ella-openclaw update ;;
         q|Q) exit 0 ;;
         *) echo -e "${RED}Ungültige Option.${NC}" ;;
     esac

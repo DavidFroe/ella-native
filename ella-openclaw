@@ -27,6 +27,11 @@ show_help() {
     echo -e "  ${GREEN}ella openclaw stop${NC}              Gateway stoppen"
     echo -e "  ${GREEN}ella openclaw restart${NC}           Gateway Neustart"
     echo -e "  ${GREEN}ella openclaw log${NC}               Live-Log (Ctrl+C)"
+    echo -e "${BOLD}Diagnose & Reparatur:${NC}"
+    echo -e "  ${GREEN}ella openclaw diagnose${NC}          Vollständige Diagnose (Gateway, Modell, HTTP)"
+    echo -e "  ${GREEN}ella openclaw fix${NC}               Auto-Fix häufiger Probleme"
+    echo -e "  ${GREEN}ella openclaw fix hard${NC}          Hard-Reset Gateway (Locks, PIDs, Port)"
+    echo -e "  ${GREEN}ella openclaw update${NC}            OpenClaw Client updaten (npm)"
     echo -e "${BOLD}Channels:${NC}"
     echo -e "  ${GREEN}ella openclaw channels${NC}          Alle Kanäle anzeigen"
     echo -e "  ${GREEN}ella openclaw channel on <name>${NC}  Kanal aktivieren"
@@ -80,6 +85,132 @@ case "$CMD" in
         ;;
     log|logs)
         $OPENCLAW_BIN logs --follow 2>&1
+        ;;
+
+    # --- Diagnose ---
+    diagnose|diag)
+        echo -e "${BLUE}${BOLD}🩺 OpenClaw Diagnose${NC}"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+        echo -e "\n${CYAN}[1] Gateway Prozess${NC}"
+        GW_PID=$(pgrep -f "openclaw.gateway|openclaw-gateway" | head -1)
+        if [ -n "$GW_PID" ]; then
+            echo -e "  ${GREEN}✅ läuft (PID $GW_PID)${NC}"
+            ps -p "$GW_PID" -o pid,user,pcpu,pmem,etime,cmd --no-headers 2>/dev/null | sed 's/^/  /'
+        else
+            echo -e "  ${RED}❌ kein Gateway-Prozess gefunden${NC}"
+        fi
+
+        echo -e "\n${CYAN}[2] HTTP Health Check (Port $GATEWAY_PORT)${NC}"
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:$GATEWAY_PORT/" 2>/dev/null)
+        if [ "$HTTP_CODE" = "200" ]; then
+            echo -e "  ${GREEN}✅ HTTP OK ($HTTP_CODE)${NC}"
+        else
+            echo -e "  ${RED}❌ HTTP fehlgeschlagen (Code: $HTTP_CODE)${NC}"
+        fi
+
+        echo -e "\n${CYAN}[3] owltrail Proxy (Port $OWLTRAIL_PORT)${NC}"
+        OWT_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://localhost:$OWLTRAIL_PORT/v1/models" 2>/dev/null)
+        if [ "$OWT_CODE" = "200" ]; then
+            echo -e "  ${GREEN}✅ owltrail antwortet ($OWT_CODE)${NC}"
+        else
+            echo -e "  ${RED}❌ owltrail antwortet nicht (Code: $OWT_CODE)${NC}"
+        fi
+
+        echo -e "\n${CYAN}[4] Modell Test (curl → owltrail)${NC}"
+        RESPONSE=$(curl -s --max-time 15 http://localhost:$OWLTRAIL_PORT/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -d '{"model":"auto","messages":[{"role":"user","content":"hi"}],"max_tokens":5}' 2>/dev/null)
+        if echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('  ✅ Antwort:', d['choices'][0]['message']['content'][:60])" 2>/dev/null; then
+            true
+        else
+            echo -e "  ${RED}❌ Kein valides JSON zurück${NC}"
+            echo -e "  ${GREY}$(echo "$RESPONSE" | head -c 200)${NC}"
+        fi
+
+        echo -e "\n${CYAN}[5] Config Pfade${NC}"
+        GW_CFG="$HOME/.openclaw/openclaw.json"
+        [ -f "$GW_CFG" ] && echo -e "  ${GREEN}✅ Gateway config: $GW_CFG${NC}" || echo -e "  ${RED}❌ $GW_CFG fehlt${NC}"
+        [ -f "$OPENCLAW_JSON_PATH" ] && echo -e "  ${GREEN}✅ Kibot config: $OPENCLAW_JSON_PATH${NC}" || echo -e "  ${YELLOW}⚠️  Kibot config nicht gefunden${NC}"
+
+        echo -e "\n${CYAN}[6] Systemd Service${NC}"
+        systemctl --user status openclaw-gateway.service --no-pager -l 2>/dev/null | head -8 | sed 's/^/  /' || \
+            echo -e "  ${GREY}(kein user-service oder nicht als dieser User)${NC}"
+
+        echo -e "\n${CYAN}[7] OpenClaw Version${NC}"
+        $OPENCLAW_BIN --version 2>/dev/null | sed 's/^/  /' || echo -e "  ${GREY}(nicht gefunden)${NC}"
+
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  Für Auto-Fix: ${CYAN}ella openclaw fix${NC}"
+        ;;
+
+    # --- Fix ---
+    fix)
+        FIX_MODE="${1:-soft}"
+        if [ "$FIX_MODE" = "hard" ]; then
+            echo -e "${RED}${BOLD}🔨 Hard-Reset OpenClaw Gateway${NC}"
+            echo -e "${YELLOW}Stoppe alle Gateway-Prozesse...${NC}"
+            $OPENCLAW_BIN gateway stop >/dev/null 2>&1 || true
+            sleep 1
+            pkill -f "openclaw.gateway" 2>/dev/null || true
+            pkill -f "openclaw-gateway" 2>/dev/null || true
+            sleep 1
+            echo -e "${YELLOW}Entferne Lock-Files und PIDs...${NC}"
+            rm -rf /tmp/openclaw/ 2>/dev/null
+            rm -f /tmp/openclaw-gateway.pid 2>/dev/null
+            if fuser $GATEWAY_PORT/tcp >/dev/null 2>&1; then
+                echo -e "${YELLOW}Port $GATEWAY_PORT freigeben...${NC}"
+                fuser -k $GATEWAY_PORT/tcp 2>/dev/null || true
+            fi
+            sleep 1
+        fi
+
+        echo -e "${CYAN}🔧 Sync Tokens & Provider Config...${NC}"
+        sync_tokens
+
+        echo -e "${CYAN}🚀 Gateway neu starten...${NC}"
+        $OPENCLAW_BIN gateway start 2>&1
+        sleep 3
+
+        if check_gw_http; then
+            echo -e "${GREEN}✅ Gateway läuft und antwortet${NC}"
+        elif check_gw_process; then
+            echo -e "${YELLOW}⚠️  Prozess läuft, HTTP noch nicht ready — warte...${NC}"
+            sleep 5
+            if check_gw_http; then
+                echo -e "${GREEN}✅ Gateway antwortet jetzt${NC}"
+            else
+                echo -e "${RED}❌ Gateway antwortet nicht. Versuche: ella openclaw fix hard${NC}"
+            fi
+        else
+            echo -e "${RED}❌ Gateway konnte nicht gestartet werden${NC}"
+            echo -e "  Nächster Schritt: ${CYAN}ella openclaw fix hard${NC}"
+        fi
+        ;;
+
+    # --- Update ---
+    update)
+        echo -e "${BLUE}${BOLD}📦 OpenClaw Client Update${NC}"
+        CURRENT=$($OPENCLAW_BIN --version 2>/dev/null | head -1)
+        echo -e "  Aktuell: ${GREY}$CURRENT${NC}"
+        echo -e "${CYAN}Installiere neueste Version via npm...${NC}"
+        if command -v npm >/dev/null 2>&1; then
+            npm install -g @openclaw/openclaw 2>&1
+            NEW=$($OPENCLAW_BIN --version 2>/dev/null | head -1)
+            echo -e "  Neu: ${GREEN}$NEW${NC}"
+            if [ "$CURRENT" != "$NEW" ]; then
+                echo -e "${GREEN}✅ Update erfolgreich!${NC}"
+                echo -e "${YELLOW}Gateway neu starten...${NC}"
+                $OPENCLAW_BIN gateway stop >/dev/null 2>&1 || true
+                sleep 1
+                sync_tokens
+                $OPENCLAW_BIN gateway start 2>&1
+            else
+                echo -e "${GREY}Bereits auf dem neuesten Stand.${NC}"
+            fi
+        else
+            echo -e "${RED}❌ npm nicht gefunden. Bitte Node.js/npm installieren.${NC}"
+        fi
         ;;
 
     # --- Channels ---
