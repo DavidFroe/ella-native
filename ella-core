@@ -133,6 +133,7 @@ export CYAN='\033[0;36m'
 export MAGENTA='\033[0;35m'
 export GREY='\033[0;90m'
 export WHITE='\033[1;37m'
+export BRONZE='\033[38;5;172m'
 export BOLD='\033[1m'
 export NC='\033[0m'
 
