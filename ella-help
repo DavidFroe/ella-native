@@ -65,6 +65,9 @@ echo -e "  ${BLUE}ella channel groups${NC}             Telegram Gruppen-Config a
 echo -e "  ${BLUE}ella channel groups open${NC}        Alle Gruppen freischalten"
 echo -e "  ${BLUE}ella channel groups mention off${NC} @mention deaktivieren"
 echo -e "  ${BLUE}ella channel groups add <id>${NC}    Gruppe zur Allowlist hinzufügen"
+echo -e "  ${BLUE}ella channel elevated${NC}           Elevated (sudo) Status anzeigen"
+echo -e "  ${BLUE}ella channel elevated on/off${NC}    Elevated aktivieren/deaktivieren"
+echo -e "  ${BLUE}ella channel elevated add telegram *${NC}  Alle Telegram-Nutzer freigeben"
 
 echo -e "${GREY}------------------------------------------------------------${NC}"
 echo -e "  owltrail = Master für Modell & Kontext"

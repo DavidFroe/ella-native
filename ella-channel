@@ -43,6 +43,13 @@ print_usage() {
     echo -e "  ${GREEN}ella channel groups add <chat_id>${NC}    Gruppe zur Allowlist hinzufügen"
     echo -e "  ${GREEN}ella channel groups remove <chat_id>${NC} Gruppe aus Allowlist entfernen"
     echo -e ""
+    echo -e "${BOLD}🔑 Elevated Permissions (sudo/Root-Befehle vom Bot):${NC}"
+    echo -e "  ${GREEN}ella channel elevated${NC}                         Status anzeigen"
+    echo -e "  ${GREEN}ella channel elevated on${NC}                      Aktivieren (telegram: alle)"
+    echo -e "  ${GREEN}ella channel elevated off${NC}                     Deaktivieren"
+    echo -e "  ${GREEN}ella channel elevated add <provider> <id|*>${NC}   Sender freigeben"
+    echo -e "  ${GREEN}ella channel elevated remove <provider> <id>${NC}  Sender sperren"
+    echo -e ""
     echo -e "${BOLD}🔑 Authentifizierung:${NC}"
     echo -e "  ${CYAN}ella telegram auth <code>${NC}            Telegram Pairing-Code bestätigen"
     echo -e "  ${CYAN}ella whatsapp auth${NC}                   WhatsApp QR-Code Pairing"
@@ -220,12 +227,162 @@ PYEOF
 }
 
 _tele_groups_restart_hint() {
-    # Nur hint wenn gateway läuft und ein Neustart sinnvoll ist
     local GW_PID
     GW_PID=$(pgrep -f "openclaw" | head -1)
     if [ -n "$GW_PID" ]; then
         echo -e "${GREY}  → Gateway läuft — Neustart empfohlen: ella openclaw restart${NC}"
     fi
+}
+
+# ---- Elevated Tool Permission Verwaltung ----
+cmd_elevated() {
+    local SUB="$1"
+    local ARG1="$2"
+    local ARG2="$3"
+    local CFG_PATH
+    CFG_PATH=$(resolve_openclaw_config)
+
+    if [ ! -f "$CFG_PATH" ]; then
+        echo -e "${RED}❌ Config nicht gefunden: $CFG_PATH${NC}"
+        exit 1
+    fi
+
+    case "$SUB" in
+        ""|show|status)
+            echo -e "${BLUE}${BOLD}🔑 Elevated Tool Permissions${NC}"
+            echo -e "${GREY}Config: $CFG_PATH${NC}"
+            python3 - "$CFG_PATH" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f: cfg = json.load(f)
+elevated = cfg.get("tools", {}).get("elevated", {})
+enabled = elevated.get("enabled", False)
+allow_from = elevated.get("allowFrom", {})
+
+green = "\033[32m"; red = "\033[31m"; yellow = "\033[33m"; reset = "\033[0m"; grey = "\033[90m"
+
+status_color = green if enabled else red
+print(f"  enabled     : {status_color}{enabled}{reset}")
+print(f"  allowFrom   :")
+if not allow_from:
+    print(f"    {yellow}(leer — niemand darf elevated nutzen){reset}")
+else:
+    for provider, senders in allow_from.items():
+        if senders == ["*"]:
+            print(f"    {provider}: {green}alle (*){reset}")
+        else:
+            print(f"    {provider}: {', '.join(str(s) for s in senders)}")
+
+exec_cfg = cfg.get("tools", {}).get("exec", {})
+if exec_cfg:
+    security = exec_cfg.get("security", "-")
+    ask = exec_cfg.get("ask", "-")
+    print(f"  exec.security: {grey}{security}{reset}  exec.ask: {grey}{ask}{reset}")
+PYEOF
+            echo ""
+            echo -e "${GREY}Befehle: ella channel elevated on | off | add <provider> <id> | remove <provider> <id>${NC}"
+            ;;
+
+        on|enable)
+            echo -e "${CYAN}🔓 Elevated Tool aktivieren (telegram: alle Sender)...${NC}"
+            python3 - "$CFG_PATH" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f: cfg = json.load(f)
+tools = cfg.setdefault("tools", {})
+elevated = tools.setdefault("elevated", {})
+elevated["enabled"] = True
+allow_from = elevated.setdefault("allowFrom", {})
+if "telegram" not in allow_from:
+    allow_from["telegram"] = ["*"]
+with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+print("OK")
+PYEOF
+            chown klauski:klauski "$CFG_PATH" 2>/dev/null || true
+            echo -e "${GREEN}✅ Elevated aktiviert — Bot kann sudo/Root-Befehle ausführen.${NC}"
+            _tele_groups_restart_hint
+            ;;
+
+        off|disable)
+            echo -e "${YELLOW}🔒 Elevated Tool deaktivieren...${NC}"
+            python3 - "$CFG_PATH" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f: cfg = json.load(f)
+tools = cfg.setdefault("tools", {})
+elevated = tools.setdefault("elevated", {})
+elevated["enabled"] = False
+with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+print("OK")
+PYEOF
+            chown klauski:klauski "$CFG_PATH" 2>/dev/null || true
+            echo -e "${GREEN}✅ Elevated deaktiviert — sudo-Befehle vom Bot gesperrt.${NC}"
+            _tele_groups_restart_hint
+            ;;
+
+        add|allow)
+            local PROVIDER="$ARG1"
+            local SENDER_ID="$ARG2"
+            if [ -z "$PROVIDER" ] || [ -z "$SENDER_ID" ]; then
+                echo -e "${RED}Verwendung: ella channel elevated add <provider> <id|*>${NC}"
+                echo -e "${GREY}  Beispiele: ella channel elevated add telegram *${NC}"
+                echo -e "${GREY}             ella channel elevated add telegram 7616071313${NC}"
+                exit 1
+            fi
+            echo -e "${CYAN}➕ $PROVIDER/$SENDER_ID zu elevated allowFrom hinzufügen...${NC}"
+            python3 - "$CFG_PATH" "$PROVIDER" "$SENDER_ID" <<'PYEOF'
+import json, sys
+path, provider, sender = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f: cfg = json.load(f)
+tools = cfg.setdefault("tools", {})
+elevated = tools.setdefault("elevated", {})
+elevated.setdefault("enabled", True)
+allow_from = elevated.setdefault("allowFrom", {})
+senders = allow_from.setdefault(provider, [])
+if sender not in senders:
+    senders.append(sender)
+    print("ADDED")
+else:
+    print("EXISTS")
+with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+PYEOF
+            chown klauski:klauski "$CFG_PATH" 2>/dev/null || true
+            echo -e "${GREEN}✅ $PROVIDER/$SENDER_ID freigegeben.${NC}"
+            _tele_groups_restart_hint
+            ;;
+
+        remove|deny|del)
+            local PROVIDER="$ARG1"
+            local SENDER_ID="$ARG2"
+            if [ -z "$PROVIDER" ] || [ -z "$SENDER_ID" ]; then
+                echo -e "${RED}Verwendung: ella channel elevated remove <provider> <id>${NC}"
+                exit 1
+            fi
+            echo -e "${YELLOW}➖ $PROVIDER/$SENDER_ID aus elevated allowFrom entfernen...${NC}"
+            python3 - "$CFG_PATH" "$PROVIDER" "$SENDER_ID" <<'PYEOF'
+import json, sys
+path, provider, sender = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f: cfg = json.load(f)
+allow_from = cfg.get("tools", {}).get("elevated", {}).get("allowFrom", {})
+senders = allow_from.get(provider, [])
+if sender in senders:
+    senders.remove(sender)
+    with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+    print("REMOVED")
+else:
+    print("NOT_FOUND")
+PYEOF
+            chown klauski:klauski "$CFG_PATH" 2>/dev/null || true
+            echo -e "${GREEN}✅ $PROVIDER/$SENDER_ID entfernt.${NC}"
+            _tele_groups_restart_hint
+            ;;
+
+        *)
+            echo -e "${RED}Unbekannter elevated-Befehl: $SUB${NC}"
+            echo -e "  Verfügbar: show | on | off | add <provider> <id> | remove <provider> <id>"
+            exit 1
+            ;;
+    esac
 }
 
 # ---- Main ----
@@ -311,6 +468,11 @@ case "$CMD" in
     # --- Telegram Gruppen (ella channel groups ...) ---
     groups|group)
         cmd_tele_groups "$CHANNEL" "$PARAM" "$EXTRA"
+        ;;
+
+    # --- Elevated Tool Permissions (ella channel elevated ...) ---
+    elevated|elevate)
+        cmd_elevated "$CHANNEL" "$PARAM" "$EXTRA"
         ;;
 
     status)

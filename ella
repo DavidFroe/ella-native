@@ -225,7 +225,7 @@ case "$COMMAND" in
     --telegram|--tg)
         cmd_part=$(echo "$PARAM" | awk '{print $1}')
         rest_part=$(echo "$PARAM" | cut -d' ' -f2-)
-        if [ -n "$cmd_part" ] && [[ "$cmd_part" != auth* ]] && [[ "$cmd_part" != on* ]] && [[ "$cmd_part" != off* ]] && [[ "$cmd_part" != status* ]] && [[ "$cmd_part" != group* ]]; then
+        if [ -n "$cmd_part" ] && [[ "$cmd_part" != auth* ]] && [[ "$cmd_part" != on* ]] && [[ "$cmd_part" != off* ]] && [[ "$cmd_part" != status* ]] && [[ "$cmd_part" != group* ]] && [[ "$cmd_part" != elevated* ]]; then
             # Chat-Nachricht: ella telegram "text" → über OpenClaw an Telegram
             echo -e "${CYAN}📱 Sende über Telegram...${NC}"
             sync_tokens
