@@ -9,23 +9,226 @@ source "$BASE_DIR/ella-core"
 CMD="$1"
 CHANNEL="$2"
 PARAM="$3"
+EXTRA="$4"
+
+# Pfad zur OpenClaw-Config (klauski-User oder eigene)
+resolve_openclaw_config() {
+    # Bevorzuge klauski-User-Config wenn vorhanden
+    if [ -f "/home/klauski/.openclaw/openclaw.json" ]; then
+        echo "/home/klauski/.openclaw/openclaw.json"
+    elif [ -f "$HOME/.openclaw/openclaw.json" ]; then
+        echo "$HOME/.openclaw/openclaw.json"
+    else
+        echo "$OPENCLAW_JSON_PATH"
+    fi
+}
 
 print_usage() {
     echo -e "${BLUE}${BOLD}📱 ELLA CHANNEL MANAGEMENT${NC}"
     echo -e "${GREY}------------------------------------------------------------${NC}"
     echo -e "Steuere externe Messenger für Ella (via OpenClaw Gateway)"
     echo -e ""
-    echo -e "  ${GREEN}ella --channel list${NC}              Zeigt alle geladenen Kanäle & Status"
-    echo -e "  ${GREEN}ella --channel on <kanal>${NC}        Aktiviert einen Kanal (z.B. whatsapp)"
-    echo -e "  ${GREEN}ella --channel off <kanal>${NC}       Deaktiviert einen Kanal"
-    echo -e "  ${GREEN}ella --channel delete <kanal>${NC}    Löscht Kanal und Credentials"
-    echo -e "  ${GREEN}ella --channel status${NC}            Verbindungsstatus & Health-Check"
+    echo -e "  ${GREEN}ella channel list${NC}                    Alle Kanäle & Status"
+    echo -e "  ${GREEN}ella channel on <kanal>${NC}              Kanal aktivieren"
+    echo -e "  ${GREEN}ella channel off <kanal>${NC}             Kanal deaktivieren"
+    echo -e "  ${GREEN}ella channel delete <kanal>${NC}          Kanal & Credentials löschen"
+    echo -e "  ${GREEN}ella channel status${NC}                  Verbindungsstatus"
     echo -e ""
-    echo -e "${BOLD}🔑 Authentifizierung (Shortcuts):${NC}"
-    echo -e "  ${CYAN}ella --whatsapp auth${NC}             Startet QR-Code Pairing für WhatsApp"
-    echo -e "  ${CYAN}ella --telegram auth <code>${NC}      Bestätigt einen Telegram Pairing-Code"
+    echo -e "${BOLD}📢 Telegram Gruppen:${NC}"
+    echo -e "  ${GREEN}ella channel groups${NC}                  Gruppen-Config anzeigen"
+    echo -e "  ${GREEN}ella channel groups open${NC}             Alle Gruppen erlauben (kein @mention)"
+    echo -e "  ${GREEN}ella channel groups lock${NC}             Nur konfigurierte Gruppen (allowlist)"
+    echo -e "  ${GREEN}ella channel groups mention on${NC}       @mention in Gruppen erforderlich"
+    echo -e "  ${GREEN}ella channel groups mention off${NC}      @mention nicht erforderlich"
+    echo -e "  ${GREEN}ella channel groups add <chat_id>${NC}    Gruppe zur Allowlist hinzufügen"
+    echo -e "  ${GREEN}ella channel groups remove <chat_id>${NC} Gruppe aus Allowlist entfernen"
+    echo -e ""
+    echo -e "${BOLD}🔑 Authentifizierung:${NC}"
+    echo -e "  ${CYAN}ella telegram auth <code>${NC}            Telegram Pairing-Code bestätigen"
+    echo -e "  ${CYAN}ella whatsapp auth${NC}                   WhatsApp QR-Code Pairing"
     echo -e ""
 }
+
+# ---- Telegram Gruppen-Verwaltung ----
+cmd_tele_groups() {
+    local SUB="$1"
+    local ARG1="$2"
+    local ARG2="$3"
+    local CFG_PATH
+    CFG_PATH=$(resolve_openclaw_config)
+
+    if [ ! -f "$CFG_PATH" ]; then
+        echo -e "${RED}❌ Config nicht gefunden: $CFG_PATH${NC}"
+        exit 1
+    fi
+
+    case "$SUB" in
+        ""|show|status)
+            echo -e "${BLUE}${BOLD}📢 Telegram Gruppen-Config${NC}"
+            echo -e "${GREY}$([ "$CFG_PATH" != "$OPENCLAW_JSON_PATH" ] && echo "Config: $CFG_PATH")${NC}"
+            python3 - "$CFG_PATH" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f: cfg = json.load(f)
+tg = cfg.get("channels", {}).get("telegram", {})
+policy = tg.get("groupPolicy", "(nicht gesetzt → allowlist fallback!)")
+groups = tg.get("groups", {})
+
+policy_color = "\033[32m" if policy == "open" else ("\033[33m" if policy == "allowlist" else "\033[31m")
+reset = "\033[0m"
+
+print(f"  groupPolicy : {policy_color}{policy}{reset}")
+print(f"  Gruppen-Einträge:")
+if not groups:
+    print("    (keine)")
+else:
+    for gid, gcfg in groups.items():
+        mention = gcfg.get("requireMention", "(Standard)")
+        enabled = gcfg.get("enabled", True)
+        status = "" if enabled else " [deaktiviert]"
+        print(f"    {gid}{status}  →  requireMention: {mention}")
+PYEOF
+            echo ""
+            echo -e "${GREY}Befehle: ella channel groups open | lock | mention on/off | add <id> | remove <id>${NC}"
+            ;;
+
+        open)
+            echo -e "${CYAN}🔓 Alle Telegram-Gruppen freischalten (groupPolicy: open)...${NC}"
+            python3 - "$CFG_PATH" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f: cfg = json.load(f)
+tg = cfg.setdefault("channels", {}).setdefault("telegram", {})
+tg["groupPolicy"] = "open"
+if "groups" not in tg:
+    tg["groups"] = {"*": {"requireMention": False}}
+elif "*" not in tg["groups"]:
+    tg["groups"]["*"] = {"requireMention": False}
+with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+print("OK")
+PYEOF
+            echo -e "${GREEN}✅ groupPolicy=open gesetzt — alle Gruppen können schreiben.${NC}"
+            _tele_groups_restart_hint
+            ;;
+
+        lock|allowlist)
+            echo -e "${YELLOW}🔒 Telegram-Gruppen auf allowlist umstellen...${NC}"
+            python3 - "$CFG_PATH" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f: cfg = json.load(f)
+tg = cfg.setdefault("channels", {}).setdefault("telegram", {})
+tg["groupPolicy"] = "allowlist"
+tg.pop("groups", None)  # Wildcard entfernen — nur explizit gelistete kommen durch
+with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+print("OK")
+PYEOF
+            echo -e "${GREEN}✅ groupPolicy=allowlist — nur explizit hinzugefügte Gruppen werden akzeptiert.${NC}"
+            echo -e "${GREY}   Tipp: ella channel groups add <chat_id>${NC}"
+            _tele_groups_restart_hint
+            ;;
+
+        mention)
+            local STATE="$ARG1"
+            if [ "$STATE" != "on" ] && [ "$STATE" != "off" ]; then
+                echo -e "${RED}Verwendung: ella channel groups mention on|off${NC}"
+                exit 1
+            fi
+            local REQUIRE
+            [ "$STATE" == "on" ] && REQUIRE="true" || REQUIRE="false"
+            echo -e "${CYAN}🔔 @mention in Gruppen: $STATE${NC}"
+            python3 - "$CFG_PATH" "$REQUIRE" <<'PYEOF'
+import json, sys
+path, require = sys.argv[1], sys.argv[2] == "true"
+with open(path) as f: cfg = json.load(f)
+tg = cfg.setdefault("channels", {}).setdefault("telegram", {})
+groups = tg.setdefault("groups", {})
+wildcard = groups.setdefault("*", {})
+wildcard["requireMention"] = require
+# Auch alle anderen Gruppen updaten
+for k, v in groups.items():
+    if k != "*" and isinstance(v, dict):
+        v["requireMention"] = require
+with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+print("OK")
+PYEOF
+            if [ "$STATE" == "on" ]; then
+                echo -e "${GREEN}✅ @mention erforderlich — Bot antwortet nur wenn er direkt erwähnt wird.${NC}"
+            else
+                echo -e "${GREEN}✅ @mention deaktiviert — Bot antwortet auf alle Nachrichten in der Gruppe.${NC}"
+            fi
+            _tele_groups_restart_hint
+            ;;
+
+        add)
+            local CHAT_ID="$ARG1"
+            if [ -z "$CHAT_ID" ]; then
+                echo -e "${RED}Verwendung: ella channel groups add <chat_id>${NC}"
+                echo -e "${GREY}  Gruppe-IDs beginnen meist mit -100... (Supergroup)${NC}"
+                exit 1
+            fi
+            echo -e "${CYAN}➕ Gruppe $CHAT_ID zur Allowlist hinzufügen...${NC}"
+            python3 - "$CFG_PATH" "$CHAT_ID" <<'PYEOF'
+import json, sys
+path, chat_id = sys.argv[1], sys.argv[2]
+with open(path) as f: cfg = json.load(f)
+tg = cfg.setdefault("channels", {}).setdefault("telegram", {})
+if tg.get("groupPolicy") != "open":
+    tg["groupPolicy"] = "allowlist"
+groups = tg.setdefault("groups", {})
+if chat_id not in groups:
+    groups[chat_id] = {"requireMention": False}
+    print("ADDED")
+else:
+    print("EXISTS")
+with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+PYEOF
+            echo -e "${GREEN}✅ Gruppe $CHAT_ID freigegeben.${NC}"
+            _tele_groups_restart_hint
+            ;;
+
+        remove|del)
+            local CHAT_ID="$ARG1"
+            if [ -z "$CHAT_ID" ]; then
+                echo -e "${RED}Verwendung: ella channel groups remove <chat_id>${NC}"
+                exit 1
+            fi
+            echo -e "${YELLOW}➖ Gruppe $CHAT_ID aus Config entfernen...${NC}"
+            python3 - "$CFG_PATH" "$CHAT_ID" <<'PYEOF'
+import json, sys
+path, chat_id = sys.argv[1], sys.argv[2]
+with open(path) as f: cfg = json.load(f)
+tg = cfg.get("channels", {}).get("telegram", {})
+groups = tg.get("groups", {})
+if chat_id in groups:
+    del groups[chat_id]
+    with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
+    print("REMOVED")
+else:
+    print("NOT_FOUND")
+PYEOF
+            echo -e "${GREEN}✅ Gruppe $CHAT_ID entfernt.${NC}"
+            _tele_groups_restart_hint
+            ;;
+
+        *)
+            echo -e "${RED}Unbekannter groups-Befehl: $SUB${NC}"
+            echo -e "  Verfügbar: show | open | lock | mention on/off | add <id> | remove <id>"
+            exit 1
+            ;;
+    esac
+}
+
+_tele_groups_restart_hint() {
+    # Nur hint wenn gateway läuft und ein Neustart sinnvoll ist
+    local GW_PID
+    GW_PID=$(pgrep -f "openclaw" | head -1)
+    if [ -n "$GW_PID" ]; then
+        echo -e "${GREY}  → Gateway läuft — Neustart empfohlen: ella openclaw restart${NC}"
+    fi
+}
+
+# ---- Main ----
 
 if [ -z "$CMD" ]; then
     print_usage
@@ -37,7 +240,7 @@ case "$CMD" in
         echo -e "${BLUE}🔎 Aktuelle OpenClaw Kanäle:${NC}"
         $OPENCLAW_BIN channels list
         ;;
-    
+
     on)
         if [ -z "$CHANNEL" ]; then
             echo -e "${RED}Fehler: Bitte gib einen Kanal an (z.B. whatsapp, telegram).${NC}"
@@ -45,10 +248,10 @@ case "$CMD" in
         fi
         echo -e "${YELLOW}Aktiviere Kanal: $CHANNEL...${NC}"
         $OPENCLAW_BIN config set channels.$CHANNEL.enabled true --json
-        echo -e "${GREEN}✅ Kanal $CHANNEL in config aktiviert.${NC}"
-        echo -e "${GREY}Hinweis: Ein Neustart des Gateways (ella --restart) ist ggf. erforderlich.${NC}"
+        echo -e "${GREEN}✅ Kanal $CHANNEL aktiviert.${NC}"
+        echo -e "${GREY}Neustart ggf. erforderlich: ella openclaw restart${NC}"
         ;;
-    
+
     off)
         if [ -z "$CHANNEL" ]; then
             echo -e "${RED}Fehler: Bitte gib einen Kanal an.${NC}"
@@ -56,9 +259,9 @@ case "$CMD" in
         fi
         echo -e "${YELLOW}Deaktiviere Kanal: $CHANNEL...${NC}"
         $OPENCLAW_BIN config set channels.$CHANNEL.enabled false --json
-        echo -e "${GREEN}✅ Kanal $CHANNEL in config deaktiviert.${NC}"
+        echo -e "${GREEN}✅ Kanal $CHANNEL deaktiviert.${NC}"
         ;;
-        
+
     delete|rm)
         if [ -z "$CHANNEL" ]; then
             echo -e "${RED}Fehler: Bitte gib einen Kanal an.${NC}"
@@ -77,37 +280,37 @@ case "$CMD" in
             echo -e "${RED}Fehler: Bitte gib einen Kanal an (whatsapp|telegram).${NC}"
             exit 1
         fi
-        
+
         if [ "$CHANNEL" == "whatsapp" ] || [ "$CHANNEL" == "wa" ]; then
             echo -e "${BLUE}📱 WhatsApp QR-Code Authentifizierung${NC}"
             echo -e "1. Öffne WhatsApp auf deinem Handy."
             echo -e "2. Gehe zu Einstellungen -> Verknüpfte Geräte -> Gerät hinzufügen."
             echo -e "3. Scanne den QR-Code, der gleich hier erscheint."
             echo -e "${GREY}------------------------------------------------------------${NC}"
-            
-            # Stelle sicher, dass der Kanal in der config aktiv ist
             $OPENCLAW_BIN config set channels.whatsapp.enabled true --json >/dev/null 2>&1
             $OPENCLAW_BIN channels login --channel whatsapp
-            
+
         elif [ "$CHANNEL" == "telegram" ] || [ "$CHANNEL" == "tg" ]; then
             if [ -z "$PARAM" ]; then
                 echo -e "${BLUE}📱 Telegram Pairing Auth${NC}"
-                echo -e "Verwendung: ${GREEN}ella --telegram auth <1234ABCD>${NC}"
+                echo -e "Verwendung: ${GREEN}ella telegram auth <1234ABCD>${NC}"
                 echo -e ""
-                echo -e "Wenn du den Bot auf Telegram anschreibst und noch nicht freigeschaltet bist,"
-                echo -e "sendet dir der Bot einen kurzen Pairing-Code zurück. Gib diesen hier ein."
+                echo -e "Wenn du den Bot anschreibst und noch nicht freigeschaltet bist,"
+                echo -e "sendet er dir einen kurzen Pairing-Code. Gib diesen hier ein."
                 exit 1
             fi
-            
-            echo -e "${YELLOW}Versuche Telegram Pairing Code zu authorisieren: $PARAM...${NC}"
-            
-            # Stelle sicher, dass der Kanal aktiv ist
+            echo -e "${YELLOW}Telegram Pairing Code authorisieren: $PARAM...${NC}"
             $OPENCLAW_BIN config set channels.telegram.enabled true --json >/dev/null 2>&1
             $OPENCLAW_BIN pairing approve telegram "$PARAM"
         else
             echo -e "${YELLOW}Info: Auth-Flow für diesen Kanal möglicherweise nicht voll unterstützt.${NC}"
             $OPENCLAW_BIN channels login --channel "$CHANNEL"
         fi
+        ;;
+
+    # --- Telegram Gruppen (ella channel groups ...) ---
+    groups|group)
+        cmd_tele_groups "$CHANNEL" "$PARAM" "$EXTRA"
         ;;
 
     status)
