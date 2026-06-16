@@ -1,11 +1,11 @@
 #!/bin/bash
 # ================================================================
 # ================================================================
-# ELLA CORE LIBRARY - v10.0 (Ella-Pi Bare Metal Edition)
+# ELLA CORE LIBRARY - v10.0
 # ================================================================
 export ELLA_VERSION="10.0"
 
-# --- NATIVE KONFIGURATION (Raspberry Pi / Linux) ---
+# --- NATIVE KONFIGURATION ---
 export THOUGHT_FILE="$HOME/.ella_thoughts"
 export LOG_FILE="$HOME/.ella.log"
 export OPENCLAW_JSON_PATH="$HOME/.config/openclaw-kibot/.openclaw/openclaw.json"
@@ -15,7 +15,14 @@ export GATEWAY_PORT=18789
 export OWLTRAIL_PORT=8081
 
 # Automatische Pfad-Erkennung für native Binaries
-export OPENCLAW_BIN=$(which openclaw 2>/dev/null || echo "$HOME/.npm-global/bin/openclaw")
+# Wenn openclaw nicht im PATH: Wrapper nutzen, der als klauski-User läuft
+if which openclaw &>/dev/null; then
+    export OPENCLAW_BIN=$(which openclaw)
+elif [ -x "$BASE_DIR/ella-oc" ]; then
+    export OPENCLAW_BIN="$BASE_DIR/ella-oc"
+else
+    export OPENCLAW_BIN="$HOME/.npm-global/bin/openclaw"
+fi
 
 # owltrail: integrierte Bibliothek (kein externer Server mehr)
 export OWLTRAIL_PY="$BASE_DIR/owltrail.py"
@@ -154,12 +161,17 @@ log_debug() {
 
 # --- NATIVE HELFER ---
 get_token() {
-    if [ -z "$CONFIG_FILE" ] || [ ! -f "$CONFIG_FILE" ]; then
-        echo "NO_TOKEN"
-        return 1
-    fi
-    TOKEN=$(grep -oP '"token":\s*"\K[^"]+' "$CONFIG_FILE" | head -n 1)
-    echo "${TOKEN:-NO_TOKEN}"
+    # Klauski-Config bevorzugen (Gateway Quelle der Wahrheit)
+    for cfg in "/home/klauski/.openclaw/openclaw.json" "$CONFIG_FILE" "$HOME/.openclaw/openclaw.json"; do
+        if [ -f "$cfg" ]; then
+            TOKEN=$(python3 -c "import json; c=json.load(open('$cfg')); print(c.get('gateway',{}).get('auth',{}).get('token',''))" 2>/dev/null)
+            if [ -n "$TOKEN" ] && [ "$TOKEN" != "None" ]; then
+                echo "$TOKEN"
+                return 0
+            fi
+        fi
+    done
+    echo "NO_TOKEN"
 }
 
 check_gw_process() {

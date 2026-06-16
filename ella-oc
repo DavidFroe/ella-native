@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Wrapper: führt openclaw als klauski-User aus (für david/root ohne nvm)
+exec sudo -u klauski bash -c 'source /home/klauski/.nvm/nvm.sh 2>/dev/null && openclaw "$@"' -- "$@"

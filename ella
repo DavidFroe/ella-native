@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 BASE_DIR=$(dirname "$(readlink -f "$0")")
 source $BASE_DIR/ella-core
 
@@ -33,7 +34,7 @@ PARAM="$*"
 case "$COMMAND" in
     # --- SYSTEM INFO ---
     --version|--v)
-        echo -e "${CYAN}ELLA v$ELLA_VERSION${NC} (Ella-Pi Bare Metal Edition)"
+        echo -e "${CYAN}ELLA v$ELLA_VERSION${NC} (Native Edition)"
         exit 0
         ;;
 
@@ -63,7 +64,7 @@ case "$COMMAND" in
 
     # --- SYSTEM CONTROL (Native) ---
     --start)
-        echo -e "${BLUE}🚀 ELLA PI STARTUP SEQUENCE${NC}"
+        echo -e "${BLUE}🚀 ELLA STARTUP SEQUENCE${NC}"
         echo -e "${GREY}-----------------------------------------${NC}"
         sync_tokens
         export_gateway_token
@@ -106,7 +107,7 @@ case "$COMMAND" in
         fi
 
         echo -e "${GREY}-----------------------------------------${NC}"
-        echo -e "${GREEN}${BOLD}🚀 Ella-Pi ist online.${NC}"
+        echo -e "${GREEN}${BOLD}🚀 Ella ist online.${NC}"
         ;;
 
     --stop)
@@ -128,7 +129,7 @@ case "$COMMAND" in
         ;;
 
     --reset-full)
-        echo -e "${RED}${BOLD}🚨 HARD RESET (Bare Metal)${NC}"
+        echo -e "${RED}${BOLD}🚨 HARD RESET${NC}"
         $0 --stop
         $0 --logs-clear
         $0 --start

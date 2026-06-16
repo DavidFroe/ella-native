@@ -1,7 +1,8 @@
+#!/usr/bin/env bash
 BASE_DIR=$(dirname "$(readlink -f "$0")")
 source $BASE_DIR/ella-core
 
-echo -e "${BLUE}${BOLD}🦉 ELLA-PI MASTER CLI - v$ELLA_VERSION (Bare Metal)${NC}"
+echo -e "${BLUE}${BOLD}🦉 ELLA MASTER CLI - v$ELLA_VERSION${NC}"
 echo -e "${GREY}------------------------------------------------------------${NC}"
 
 echo -e "${BOLD}💬 CORE INTERACTION:${NC}"
@@ -48,8 +49,8 @@ echo -e "  ${CYAN}ella --reset-full${NC}      Radikaler Nullpunkt & Log-Wipe"
 
 echo -e "\n${BOLD}🌍 GLOBETROTTER (Migration):${NC}"
 echo -e "  ${YELLOW}ella --backup${NC}          Erstellt .tar.gz inkl. Gehirn & Config"
-echo -e "  ${YELLOW}ella --restore <zip>${NC}   Teleportiert Ella auf diesen Pi"
-echo -e "  ${YELLOW}ella --migrate${NC}         Interaktiver Umzug auf einen neuen Pi"
+echo -e "  ${YELLOW}ella --restore <zip>${NC}   Ella-Backup wiederherstellen"
+echo -e "  ${YELLOW}ella --migrate${NC}         Interaktiver Umzug auf eine andere Maschine"
 
 echo -e "\n${BOLD}🩺 DIAGNOSTICS & LOGS:${NC}"
 echo -e "  ${MAGENTA}ella --repair${NC}         Interactive Repair Wizard"

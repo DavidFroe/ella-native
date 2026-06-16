@@ -1,7 +1,8 @@
+#!/usr/bin/env bash
 BASE_DIR=$(dirname "$(readlink -f "$0")")
 source $BASE_DIR/ella-core
 
-echo -e "${BLUE}📊 --- ELLA-PI MASTER STATUS (v${ELLA_VERSION}) ---${NC}"
+echo -e "${BLUE}📊 --- ELLA MASTER STATUS (v${ELLA_VERSION}) ---${NC}"
 echo -e "${GREY}------------------------------------------------------------${NC}"
 
 # 1. PROCESS STATUS
@@ -24,10 +25,17 @@ fi
 
 # 2. SYSTEM RESOURCES
 echo -e "\n${MAGENTA}📈 SYSTEM LOAD:${NC}"
-CPU_LOAD=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')"%"
-RAM_FREE=$(free -m | awk '/Mem:/ { printf "%0.2f%%", $3/$2*100 }')
+CPU_LOAD=$(python3 -c "
+import time
+with open('/proc/stat') as f: l1=f.readline().split()
+time.sleep(0.3)
+with open('/proc/stat') as f: l2=f.readline().split()
+d=[int(b)-int(a) for a,b in zip(l1[1:],l2[1:])]
+print(f'{100*(d[0]+d[2])/sum(d):.1f}%')
+" 2>/dev/null || echo "?%")
+RAM_INFO=$(free -m | awk 'NR==2 { printf "%dMB / %dMB (%.0f%%)", $3, $2, $3/$2*100 }')
 echo -e "  🧠 CPU:         ${YELLOW}$CPU_LOAD${NC}"
-echo -e "  💾 RAM:         ${YELLOW}$RAM_FREE${NC}"
+echo -e "  💾 RAM:         ${YELLOW}$RAM_INFO${NC}"
 
 # 3. OPENCLAW STATUS
 echo -e "\n${MAGENTA}🧠 AGENT PROFILE:${NC}"
@@ -54,4 +62,4 @@ else
 fi
 
 echo -e "${GREY}------------------------------------------------------------${NC}"
-check_gw_http && echo -e "${GREEN}${BOLD}✅ RESULT: Ella-Pi Status OK${NC}" || echo -e "${RED}${BOLD}❌ RESULT: Ella-Pi Status ERROR${NC}"
+check_gw_http && echo -e "${GREEN}${BOLD}✅ RESULT: Ella Status OK${NC}" || echo -e "${RED}${BOLD}❌ RESULT: Ella Status ERROR${NC}"
