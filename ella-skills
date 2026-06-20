@@ -142,14 +142,49 @@ EOSKILL
         fi
         ;;
 
+    # --- ClawHub: OpenClaws eigener Skill-Katalog (vorgefertigte/"vanilla" Skills) ---
+    search|find)
+        if [ -z "$*" ]; then
+            echo -e "${RED}Usage: ella skills search <suchwort>${NC}"
+            exit 1
+        fi
+        echo -e "${BLUE}🔍 ClawHub-Katalog durchsuchen: $*${NC}"
+        bot_run "$OPENCLAW_BIN skills search $*"
+        echo -e "${GREY}Details:  ella skills info <slug>${NC}"
+        echo -e "${GREY}Holen:    ella skills install <slug>${NC}"
+        ;;
+
+    info)
+        if [ -z "$NAME" ]; then
+            echo -e "${RED}Usage: ella skills info <slug>${NC}"
+            exit 1
+        fi
+        bot_run "$OPENCLAW_BIN skills info '$NAME'"
+        ;;
+
+    install|add|get)
+        if [ -z "$NAME" ]; then
+            echo -e "${RED}Usage: ella skills install <slug>${NC}"
+            echo -e "${GREY}Erst suchen: ella skills search <suchwort>${NC}"
+            exit 1
+        fi
+        echo -e "${CYAN}📦 Installiere Skill '$NAME' von ClawHub...${NC}"
+        bot_run "$OPENCLAW_BIN skills install '$NAME'"
+        ;;
+
     --help|-h)
         echo -e "${BLUE}${BOLD}🧩 ELLA SKILLS — Bot-Skills verwalten${NC}"
         echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "${BOLD}Eigene Skills im Workspace:${NC}"
         echo -e "  ${GREEN}ella skills list${NC}            Alle Skills mit Status anzeigen"
         echo -e "  ${GREEN}ella skills show <name>${NC}     SKILL.md-Inhalt anzeigen"
         echo -e "  ${GREEN}ella skills edit <name>${NC}     Im Editor bearbeiten (\$EDITOR, sonst nano)"
-        echo -e "  ${GREEN}ella skills create <name>${NC}   Neues Skill-Gerüst anlegen"
+        echo -e "  ${GREEN}ella skills create <name>${NC}   Neues Skill-Gerüst anlegen (von Hand)"
         echo -e "  ${GREEN}ella skills delete <name>${NC}   Skill löschen (mit Bestätigung)"
+        echo -e "${BOLD}ClawHub-Katalog (vorgefertigte Skills):${NC}"
+        echo -e "  ${GREEN}ella skills search <wort>${NC}   ClawHub nach Skills durchsuchen"
+        echo -e "  ${GREEN}ella skills info <slug>${NC}     Details zu einem ClawHub-Skill"
+        echo -e "  ${GREEN}ella skills install <slug>${NC}  Skill von ClawHub in den Workspace holen"
         ;;
 
     *)
