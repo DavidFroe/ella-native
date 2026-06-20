@@ -25,7 +25,19 @@ fi
 # diese löschen (kein Neustart, keine anderen Chats betroffen). Gedacht
 # dafür, dass der Bot sich selbst auf Zuruf ("vergiss diesen Chat") die
 # eigene Erinnerung für genau diese Unterhaltung löscht.
+#
+# WICHTIG: Wenn der Bot das auf sich SELBST anwendet, tut er das immer
+# MITTEN in der laufenden Antwort auf genau die Nachricht, die ihn dazu
+# aufgefordert hat -- die Session-Datei ist also in dem Moment noch durch
+# den laufenden embedded-Prompt gesperrt. Ein sofortiges Umbenennen reisst
+# OpenClaw die Datei unter dem laufenden Versuch weg
+# (EmbeddedAttemptSessionTakeoverError) und die Antwort geht komplett
+# verloren, ohne dass der Nutzer ueberhaupt eine Fehlermeldung sieht.
+# Deshalb hier verzoegert im Hintergrund ausfuehren, NACHDEM die laufende
+# Antwort fertig raus ist und die Sperre wieder frei ist.
+SELF_MODE=false
 if [ "$VAL" = "self" ] || [ "$VAL" = "mine" ]; then
+    SELF_MODE=true
     VAL=$(bot_run "$OPENCLAW_BIN sessions --json --limit 3" 2>/dev/null | \
         python3 -c "
 import json, sys
@@ -42,6 +54,13 @@ except Exception:
         echo -e "${RED}❌ Konnte aktuelle Session nicht automatisch ermitteln.${NC}"
         exit 1
     fi
+fi
+
+if [ -n "$VAL" ] && [ "$SELF_MODE" = true ]; then
+    echo -e "${GREEN}✅ Ok, ich vergesse diesen Chat — wird gleich nach dieser Antwort wirksam.${NC}"
+    ( bot_run "sleep 45; python3 '$BASE_DIR/ella-session-clear.py' '$SESSIONS_DIR' '$VAL' > /dev/null 2>&1; $OPENCLAW_BIN sessions cleanup --fix-missing --enforce > /dev/null 2>&1" ) >> "$ELLA_WATCHDOG_LOG" 2>&1 &
+    disown
+    exit 0
 fi
 
 if [ -n "$VAL" ]; then
