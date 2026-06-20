@@ -30,13 +30,18 @@ GREEN='\033[32m'; GREY='\033[90m'; YELLOW='\033[33m'; RED='\033[31m'; R='\033[0m
 
 verbose = '$VERBOSE' == '1'
 
+skills = []
+proc = subprocess.run(['$OPENCLAW_BIN', 'skills', 'list', '--json'],
+                       capture_output=True, text=True, timeout=20)
 try:
-    out = subprocess.run(['$OPENCLAW_BIN', 'skills', 'list', '--json'],
-                          capture_output=True, text=True, timeout=20).stdout
-    skills = json.loads(out).get('skills', [])
+    skills = json.loads(proc.stdout).get('skills', [])
 except Exception as e:
     print(f'{RED}❌ Konnte Skill-Liste nicht laden: {e}{R}')
-    skills = []
+    print(f'{GREY}   Befehl: $OPENCLAW_BIN skills list --json (exit={proc.returncode}){R}')
+    if proc.stderr.strip():
+        print(f'{GREY}   stderr: {proc.stderr.strip()[:500]}{R}')
+    if proc.stdout.strip():
+        print(f'{GREY}   stdout: {proc.stdout.strip()[:300]}{R}')
 
 def row(s):
     status = f'{GREEN}✓ aktiv{R}' if s.get('eligible') else f'{GREY}△ Setup nötig{R}'
