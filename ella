@@ -154,7 +154,14 @@ case "$COMMAND" in
         fi
 
         echo -ne "  📥 Hole neuesten Stand von GitHub...  "
-        if git pull --ff-only origin main 2>&1 | grep -q "Already up to date"; then
+        PULL_OUT=$(git pull --ff-only origin main 2>&1)
+        PULL_RC=$?
+        if [ $PULL_RC -ne 0 ]; then
+            echo -e "${RED}fehlgeschlagen${NC}"
+            echo -e "${GREY}$PULL_OUT${NC}"
+            echo -e "${RED}❌ Update abgebrochen — Code wurde NICHT aktualisiert.${NC}"
+            exit 1
+        elif echo "$PULL_OUT" | grep -q "Already up to date"; then
             echo -e "${GREEN}bereits aktuell.${NC}"
         else
             echo -e "${GREEN}OK${NC}"
