@@ -41,14 +41,25 @@ export OPENCLAW_CONFIG_PATH="$OPENCLAW_JSON_PATH"
 export GATEWAY_PORT=18789
 export OWLTRAIL_PORT=8081
 
-# Automatische Pfad-Erkennung für native Binaries
-# Wenn openclaw nicht im PATH: Wrapper nutzen, der als BOT_USER läuft
-if which openclaw &>/dev/null; then
-    export OPENCLAW_BIN=$(which openclaw)
+# Automatische Pfad-Erkennung für native Binaries.
+# Reihenfolge wichtig: direkte Pfade (nvm/npm-global) nur sinnvoll, wenn
+# der Bot unter dem AKTUELLEN User laeuft (Single-User-Standardfall) --
+# sonst landen wir auf der falschen Installation. Erst wenn BOT_USER
+# explizit auf einen ANDEREN Account zeigt (Admin verwaltet separaten
+# Bot-Account, wie klauski), kommt der sudo-Wrapper ella-oc zum Zug.
+if [ "$BOT_USER" = "$(whoami)" ]; then
+    if which openclaw &>/dev/null; then
+        export OPENCLAW_BIN=$(which openclaw)
+    elif [ -x "$HOME/.npm-global/bin/openclaw" ]; then
+        export OPENCLAW_BIN="$HOME/.npm-global/bin/openclaw"
+    else
+        NVM_OC=$(compgen -G "$HOME/.nvm/versions/node/*/bin/openclaw" 2>/dev/null | sort -V | tail -1)
+        export OPENCLAW_BIN="${NVM_OC:-openclaw}"
+    fi
 elif [ -x "$BASE_DIR/ella-oc" ]; then
     export OPENCLAW_BIN="$BASE_DIR/ella-oc"
 else
-    export OPENCLAW_BIN="$HOME/.npm-global/bin/openclaw"
+    export OPENCLAW_BIN="$BOT_USER_HOME/.npm-global/bin/openclaw"
 fi
 
 # owltrail: integrierte Bibliothek (kein externer Server mehr)
