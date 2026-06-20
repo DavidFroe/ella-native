@@ -327,7 +327,7 @@ if [[ ! "$INSTALL_WEB" =~ ^[nN]$ ]]; then
     bash "$BASE_DIR/ella-web" install
 fi
 
-echo -n "   Watchdog (erkennt hängende Aufgaben + Kontext-Überlauf, prüft alle 5 Min.) als Timer einrichten? [J/n]: "
+echo -n "   Watchdog (erkennt hängende Aufgaben + Kontext-Überlauf, Standard-Intervall 5 Min., einstellbar) als Timer einrichten? [J/n]: "
 read -r INSTALL_WD
 if [[ ! "$INSTALL_WD" =~ ^[nN]$ ]]; then
     bash "$BASE_DIR/ella-watchdog" install
@@ -348,6 +348,10 @@ echo -e "  ${CYAN}ella help${NC}            Alle Befehle"
 echo -e "  ${CYAN}ella web status${NC}      Status-Webseite prüfen (http://localhost:8088/)"
 echo -e "  ${CYAN}ella owltrail budget show${NC}  Token-Kontingent prüfen"
 echo -e "  ${CYAN}ella watchdog status${NC} Watchdog-Status prüfen"
+echo ""
+echo -e "${GREY}Optional, standardmäßig AUS: 'ella bigloop on' aktiviert eine Session-${NC}"
+echo -e "${GREY}Review-Schleife (Gemma beurteilt rotierend, ob Unterhaltungen adäquat${NC}"
+echo -e "${GREY}abgeschlossen wirken). Details: ella bigloop --help${NC}"
 echo ""
 echo -e "${GREY}Für eine separate Bot-User-Einrichtung (Admin verwaltet einen eigenen${NC}"
 echo -e "${GREY}Bot-Account): ella.conf.example nach ella.conf kopieren und BOT_USER setzen.${NC}"
