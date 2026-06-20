@@ -183,6 +183,13 @@ except Exception:
 
 case "$SUB" in
     check)
+        # --- Bigloop mittickenen lassen -- VOR dem Watchdog-eigenen Gate,
+        # da Bigloop ihr eigenes, unabhaengiges An/Aus + Intervall hat (siehe
+        # ella-bigloop.py) und sonst nie oefter laufen koennte als der
+        # Watchdog selbst (z.B. Bigloop alle 30s, Watchdog alle 300s --
+        # ohne diese Trennung waere Bigloop faktisch auf 300s gedeckelt).
+        bash "$BASE_DIR/ella-bigloop" check >> "$ELLA_WATCHDOG_LOG" 2>&1
+
         WD_ENABLED=$(_wd_field enabled True)
         if [ "$WD_ENABLED" = "False" ]; then
             echo -e "${GREY}⏸  Watchdog deaktiviert.${NC}"
@@ -206,9 +213,6 @@ except Exception:
             fi
         fi
         _wd_set_field last_check_at "\"$(date -Iseconds)\"" > /dev/null
-
-        # --- Bigloop mittickenen lassen (eigenstaendiges An/Aus + Intervall) ---
-        bash "$BASE_DIR/ella-bigloop" check >> "$ELLA_WATCHDOG_LOG" 2>&1
 
         # --- Kontext-Ueberlauf-Erkennung (eigenstaendig vom Task-Heartbeat) ---
         # Liest neue Zeilen im Gateway-Log seit dem letzten Check; erkennt
