@@ -304,6 +304,15 @@ def main():
     # den Zeitstempel schon beim Start setzen, koennte der naechste Timer-
     # Tick faelschlich denken, das Intervall sei schon abgelaufen, und einen
     # ZWEITEN, ueberlappenden Lauf starten.
+    # review_completed wird NUR bei einem ECHTEN Urteil (OK oder FOLLOWUP)
+    # auf True gesetzt. Ein technischer Fehler (keine sessionId, leeres
+    # Transkript, keine/leere Antwort vom Reviewer-Modell) darf die Session
+    # NICHT als "geprueft" verbuchen -- sonst faellt sie aus dem Kandidaten-
+    # Pool, obwohl gar nichts bewertet wurde, und wird (falls niemand mehr
+    # neu schreibt) NIE WIEDER geprueft -- ein echter Deadlock, live erlebt
+    # mit genau dieser Session: ein einzelner transienter Gemma-Fehler hat
+    # sie auf unbestimmte Zeit aus der Pruefschleife genommen.
+    review_completed = False
     try:
         session_id = session_id_hint
         if not session_id:
@@ -320,24 +329,28 @@ def main():
         _dbg(debug, f"sende an Reviewer-Modell '{model_id}' (Kontext-Cap {context_cap} Tok. ~{int(context_cap)*3} Zeichen)")
         verdict = review_with_gemma(text, model_id, context_cap)
         if not verdict:
-            _info(f"reviewed session={session_key} id={session_id} model={model_id} -> FEHLER (keine/leere Antwort vom Reviewer-Modell)")
+            _info(f"reviewed session={session_key} id={session_id} model={model_id} -> FEHLER (keine/leere Antwort vom Reviewer-Modell) -- wird beim naechsten Lauf erneut versucht")
             return
         _dbg(debug, f"Antwort vom Reviewer-Modell:\n{'-'*40}\n{verdict}\n{'-'*40}")
 
         lines = verdict.splitlines()
         first = (lines[0].strip().upper() if lines else "")
         if first != "FOLLOWUP":
+            review_completed = True
             _info(f"reviewed session={session_key} id={session_id} model={model_id} -> {first or 'OK'} (kein Nachhaken noetig)")
             return
 
         followup_prompt = "\n".join(lines[1:]).strip()
         if not followup_prompt:
+            review_completed = True
             _info(f"reviewed session={session_key} id={session_id} model={model_id} -> FOLLOWUP erkannt, aber kein Prompt-Text dahinter -- ABBRUCH")
             return
+        review_completed = True
         _info(f"reviewed session={session_key} id={session_id} model={model_id} -> FOLLOWUP: {followup_prompt.splitlines()[0][:100]}")
     finally:
         cfg["last_run_at"] = now().isoformat()
-        reviews[session_key] = now().isoformat()
+        if review_completed:
+            reviews[session_key] = now().isoformat()
         save_config(cfg)
 
     fd, prompt_file = tempfile.mkstemp(dir=BOT_USER_HOME, prefix=".ella_bigloop_prompt_")
