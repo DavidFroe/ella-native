@@ -223,6 +223,11 @@ if isinstance(ctx_window, int) and ctx_window > 0:
     if updated:
         print(f'{CYAN}🔧 Kontext angepasst: {h} ({ctx_window:,} Tokens){R}')
 " "$MODEL"
+            # owltrail neu starten, damit der laufende Prozess das neue
+            # model_id_override uebernimmt -- der laufende Prozess liest
+            # owltrail.conf nur beim Start, nicht laufend neu ein.
+            echo -e "${CYAN}🔄 Starte owltrail neu, damit das Modell aktiv wird...${NC}"
+            bash "$BASE_DIR/ella-owltrail" restart
         fi
         ;;
 

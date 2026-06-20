@@ -7,7 +7,7 @@ COMMAND="$1"
 # 1. SMART DIRECT ASK (Nativ)
 if [[ "$COMMAND" != --* ]] && [ -n "$COMMAND" ]; then
     case "$COMMAND" in
-        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|watchdog|web|alcohol|sessions|tele|models|context|timeout|test-llm|version|channel|whatsapp|wa|telegram|tg|owltrail|openclaw|gateway|repair|quiteque|qq|deepthink)
+        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|watchdog|web|alcohol|sessions|tele|models|context|timeout|test-llm|version|channel|whatsapp|wa|telegram|tg|owltrail|openclaw|gateway|repair|quiteque|qq|deepthink|update)
             COMMAND="--$COMMAND"
             ;;
         *)
@@ -139,6 +139,45 @@ case "$COMMAND" in
 
     --repair)
         $BASE_DIR/ella-repair
+        ;;
+
+    --update)
+        echo -e "${BLUE}${BOLD}🔄 ELLA UPDATE${NC}"
+        echo -e "${GREY}-----------------------------------------${NC}"
+        cd "$BASE_DIR" || exit 1
+
+        if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+            echo -e "${RED}❌ Lokale Änderungen an versionierten Dateien gefunden — Update abgebrochen.${NC}"
+            echo -e "${GREY}   git -C $BASE_DIR status${NC}"
+            echo -e "${GREY}   Erst committen/verwerfen, dann 'ella update' erneut versuchen.${NC}"
+            exit 1
+        fi
+
+        echo -ne "  📥 Hole neuesten Stand von GitHub...  "
+        if git pull --ff-only origin main 2>&1 | grep -q "Already up to date"; then
+            echo -e "${GREEN}bereits aktuell.${NC}"
+        else
+            echo -e "${GREEN}OK${NC}"
+        fi
+
+        chmod +x ella ella-* *.sh 2>/dev/null || true
+
+        echo -e "\n  ${CYAN}Starte laufende Dienste neu, damit Änderungen wirken...${NC}"
+        if check_gw_process; then
+            echo -ne "    🛰️  Gateway...  "
+            bash "$BASE_DIR/ella-openclaw" restart > /dev/null 2>&1 && echo -e "${GREEN}OK${NC}" || echo -e "${YELLOW}prüfen${NC}"
+        fi
+        if bot_run "[ -f '$OWLTRAIL_PID' ] && kill -0 \$(head -1 '$OWLTRAIL_PID') 2>/dev/null"; then
+            echo -ne "    🦉 owltrail...  "
+            bash "$BASE_DIR/ella-owltrail" restart > /dev/null 2>&1 && echo -e "${GREEN}OK${NC}" || echo -e "${YELLOW}prüfen${NC}"
+        fi
+        if bot_run "pgrep -f 'ella-web.py' > /dev/null 2>&1"; then
+            echo -ne "    🌐 Webseite...  "
+            bash "$BASE_DIR/ella-web" restart > /dev/null 2>&1 && echo -e "${GREEN}OK${NC}" || echo -e "${YELLOW}prüfen${NC}"
+        fi
+
+        echo -e "${GREY}-----------------------------------------${NC}"
+        echo -e "${GREEN}${BOLD}✅ Update abgeschlossen.${NC}"
         ;;
 
     --deepthink)

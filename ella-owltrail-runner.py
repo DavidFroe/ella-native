@@ -108,13 +108,16 @@ def main() -> None:
     with open(args.pid, "w") as f:
         f.write(f"{os.getpid()}\n{port}\n")
 
-    proxy = owltrail.OwlTrailProxy(conf_file=args.conf, tokens_log_path=args.tokens_log)
+    proxy = owltrail.OwlTrailProxy(
+        conf_file=args.conf, model_id=cfg.get("model_id"), tokens_log_path=args.tokens_log,
+    )
     proxy.start(port=port)
 
     log.info(
-        "owltrail gestartet: Port=%d  User=%s  QuiteQue=%s:%s",
+        "owltrail gestartet: Port=%d  User=%s  Modell=%s  QuiteQue=%s:%s",
         port,
         cfg.get("username", "?"),
+        cfg.get("model_id", "auto"),
         cfg.get("server_ip", "?"),
         cfg.get("quiteque_port", "?"),
     )

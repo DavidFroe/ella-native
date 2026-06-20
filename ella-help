@@ -69,6 +69,7 @@ echo -e "  ${CYAN}ella --start${NC}           Gateway + owltrail starten"
 echo -e "  ${CYAN}ella --stop${NC}            Alle Prozesse beenden"
 echo -e "  ${CYAN}ella --restart${NC}         Schneller Neustart"
 echo -e "  ${CYAN}ella --reset-full${NC}      Komplett-Reset + Log-Wipe"
+echo -e "  ${CYAN}ella update${NC}            Neuesten Stand von GitHub holen + laufende Dienste neu starten"
 
 echo -e "\n${BOLD}🌍 MIGRATION:${NC}"
 echo -e "  ${YELLOW}ella --backup${NC}          Backup erstellen (.tar.gz mit Config + Gehirn)"
