@@ -18,48 +18,67 @@ NAME="$1"
 
 case "$SUB" in
     list|ls|show_all)
-        echo -e "${BLUE}${BOLD}🧩 Skills in $SKILLS_DIR${NC}"
+        VERBOSE="0"
+        if [ "$NAME" = "-v" ] || [ "$NAME" = "--all" ]; then
+            VERBOSE="1"
+        fi
+        echo -e "${BLUE}${BOLD}🧩 Skills (Workspace + fest eingebaut)${NC}"
         bot_python3 -c "
-import json, os, subprocess
+import json, subprocess
 
-GREEN='\033[32m'; GREY='\033[90m'; RED='\033[31m'; R='\033[0m'; BOLD='\033[1m'
+GREEN='\033[32m'; GREY='\033[90m'; YELLOW='\033[33m'; RED='\033[31m'; R='\033[0m'; BOLD='\033[1m'
 
-skills_dir = '$SKILLS_DIR'
-on_disk = sorted(os.listdir(skills_dir)) if os.path.isdir(skills_dir) else []
+verbose = '$VERBOSE' == '1'
 
-eligible = {}
 try:
     out = subprocess.run(['$OPENCLAW_BIN', 'skills', 'list', '--json'],
-                          cwd=os.path.dirname(skills_dir), capture_output=True, text=True, timeout=20).stdout
-    data = json.loads(out)
-    for s in data.get('skills', []):
-        eligible[s.get('name')] = s
-except Exception:
-    pass
+                          capture_output=True, text=True, timeout=20).stdout
+    skills = json.loads(out).get('skills', [])
+except Exception as e:
+    print(f'{RED}❌ Konnte Skill-Liste nicht laden: {e}{R}')
+    skills = []
 
-if not on_disk:
-    print(f'  {GREY}Keine Skills vorhanden — ella skills create <name> zum Anlegen.{R}')
+def row(s):
+    status = f'{GREEN}✓ aktiv{R}' if s.get('eligible') else f'{GREY}△ Setup nötig{R}'
+    emoji = s.get('emoji') or '🧩'
+    print(f'  {emoji} {BOLD}{s[\"name\"]}{R}  [{status}]')
+    desc = s.get('description', '')
+    if desc:
+        print(f'      {GREY}{desc[:110]}{R}')
+    if verbose and not s.get('eligible'):
+        m = s.get('missing', {}) or {}
+        need = []
+        if m.get('bins'): need.append('Programme: ' + ', '.join(m['bins']))
+        if m.get('env'): need.append('Env-Vars: ' + ', '.join(m['env']))
+        if m.get('config'): need.append('Config: ' + ', '.join(m['config']))
+        if need:
+            print(f'      {YELLOW}braucht: {\"; \".join(need)}{R}')
+
+by_source = {}
+for s in skills:
+    by_source.setdefault(s.get('source', '?'), []).append(s)
+
+ws = sorted(by_source.get('openclaw-workspace', []), key=lambda x: x['name'])
+print(f'{BOLD}Eigene Skills (Workspace):{R}')
+if not ws:
+    print(f'  {GREY}Keine — ella skills create <name> zum Anlegen.{R}')
+for s in ws:
+    row(s)
+
+bundled = by_source.get('openclaw-bundled', []) + by_source.get('openclaw-extra', [])
+ready = sorted([s for s in bundled if s.get('eligible')], key=lambda x: x['name'])
+not_ready = sorted([s for s in bundled if not s.get('eligible')], key=lambda x: x['name'])
+
+print(f'\n{BOLD}Fest eingebaut, sofort einsatzbereit ({len(ready)}):{R}')
+for s in ready:
+    row(s)
+
+print(f'\n{GREY}+ {len(not_ready)} weitere fest eingebaute Skills brauchen noch Setup (CLI-Tool/Token/Config).{R}')
+if not verbose:
+    print(f'{GREY}  Details dazu: ella skills list -v{R}')
 else:
-    for name in on_disk:
-        path = os.path.join(skills_dir, name, 'SKILL.md')
-        if not os.path.isfile(path):
-            continue
-        info = eligible.get(name, {})
-        status = f'{GREEN}✓ aktiv{R}' if info.get('eligible') else f'{GREY}inaktiv{R}'
-        emoji = info.get('emoji', '🧩')
-        desc = info.get('description', '')
-        if not desc:
-            try:
-                with open(path, encoding='utf-8') as f:
-                    for line in f:
-                        if line.lower().startswith('description:'):
-                            desc = line.split(':', 1)[1].strip().strip('\"')
-                            break
-            except Exception:
-                pass
-        print(f'  {emoji} {BOLD}{name}{R}  [{status}]')
-        if desc:
-            print(f'      {GREY}{desc[:100]}{R}')
+    for s in not_ready:
+        row(s)
 "
         ;;
 
