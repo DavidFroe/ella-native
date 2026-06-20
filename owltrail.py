@@ -218,12 +218,20 @@ class _Handler(BaseHTTPRequestHandler):
             headers["X-OwlTrail-User"] = username
 
         # Modell-Override gilt nur fuer Chat-Completions, nicht fuer
-        # /v1/embeddings oder /v1/rerank (eigene Modelle wie bge-m3)
+        # /v1/embeddings oder /v1/rerank (eigene Modelle wie bge-m3) -- UND
+        # nur, wenn der Aufrufer den statischen Alias-Namen "auto" schickt
+        # (so sendet OpenClaw es immer, das eigentliche Modell entscheidet
+        # dann owltrail.conf). Schickt ein Aufrufer explizit ein ANDERES
+        # Modell (z.B. Gemma fuer eigene Hilfsaufrufe wie Bigloop/Crash-
+        # Recovery), wird das NICHT ueberschrieben -- sonst landet jede
+        # solche Anfrage versehentlich beim Haupt-Bot-Modell statt beim
+        # tatsaechlich angeforderten.
         if body and self.__class__.model_id_override and path.rstrip("/").endswith("/chat/completions"):
             try:
                 data = json.loads(body)
-                data["model"] = str(self.__class__.model_id_override)
-                body = json.dumps(data).encode()
+                if data.get("model") in (None, "auto"):
+                    data["model"] = str(self.__class__.model_id_override)
+                    body = json.dumps(data).encode()
             except Exception:
                 pass
 

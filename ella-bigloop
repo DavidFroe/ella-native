@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# ================================================================
+# ELLA BIGLOOP — rotiert durch OpenClaw-Sessions und laesst ein
+# Reviewer-Modell (Standard: Gemma) beurteilen, ob eine Unterhaltung
+# fuer den Nutzer zufriedenstellend abgeschlossen aussieht. Findet sie
+# einen Verdachtsfall, setzt sie selbst eine "Grosse Aufgabe" und stoesst
+# den Bot zum Nachhaken an.
+#
+# Laeuft nur, wenn aktiviert UND keine "Grosse Aufgabe" bereits aktiv ist
+# -- die Bigloop sucht sich quasi selbst Arbeit, wenn der Bot sonst
+# nichts zu tun hat. Wird typischerweise vom Watchdog-Timer mitgetickt
+# (siehe ella-watchdog), kann aber auch manuell angestossen werden.
+# ================================================================
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source "$BASE_DIR/ella-core"
+
+CONFIG_FILE="$BOT_USER_HOME/.ella_bigloop.json"
+BIGLOOP_LOG="$BOT_USER_HOME/.ella_bigloop.log"
+SESSIONS_DIR="$BOT_USER_HOME/.openclaw/agents/main/sessions"
+SUB="${1:-status}"
+shift 2>/dev/null
+
+_log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$BIGLOOP_LOG"
+}
+
+_load_field() {
+    bot_python3 -c "
+import json
+try:
+    d = json.load(open('$CONFIG_FILE'))
+except Exception:
+    d = {}
+print(d.get('$1', '$2'))
+" 2>/dev/null
+}
+
+_set_field() {
+    # $1=Feldname $2=Wert(JSON-literal, z.B. true/123/\"abc\")
+    bot_python3 -c "
+import json
+path = '$CONFIG_FILE'
+try:
+    d = json.load(open(path))
+except Exception:
+    d = {}
+d['$1'] = $2
+with open(path, 'w') as f:
+    json.dump(d, f, indent=2)
+"
+}
+
+# Gleiches Prinzip wie in ella-watchdog (dort kann wegen 'case' am
+# Top-Level nicht direkt gesourct werden, deshalb hier dupliziert).
+_notify_session() {
+    local session="$1" msg="$2" chat_id
+    case "$session" in *telegram*) ;; *) return 0 ;; esac
+    chat_id=$(echo "$session" | awk -F: '{print $NF}')
+    [ -z "$chat_id" ] && return 0
+    if [ "$BOT_USER" = "$(whoami)" ]; then
+        bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw message send --channel telegram --target "$1" --message "$2"' _ "$chat_id" "$msg" >/dev/null 2>&1
+    else
+        sudo -u "$BOT_USER" bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw message send --channel telegram --target "$1" --message "$2"' _ "$chat_id" "$msg" >/dev/null 2>&1
+    fi
+}
+
+_reinject_task() {
+    local session="$1" task="$2"
+    if [ "$BOT_USER" = "$(whoami)" ]; then
+        nohup bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw agent --agent main --session-key "$1" --message "$2" --deliver' _ "$session" "$task" >> "$BIGLOOP_LOG" 2>&1 &
+    else
+        sudo -u "$BOT_USER" bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw agent --agent main --session-key "$1" --message "$2" --deliver' _ "$session" "$task" >> "$BIGLOOP_LOG" 2>&1 &
+    fi
+    disown 2>/dev/null
+}
+
+_parse_seconds() {
+    case "$1" in
+        *h) echo $(( ${1%h} * 3600 )) ;;
+        *m) echo $(( ${1%m} * 60 )) ;;
+        [0-9]*) echo "$1" ;;
+        *) echo "" ;;
+    esac
+}
+
+_parse_tokens() {
+    case "$1" in
+        *[kK]) echo $(( ${1%[kK]} * 1000 )) ;;
+        *[mM]) echo $(( ${1%[mM]} * 1000000 )) ;;
+        [0-9]*) echo "$1" ;;
+        *) echo "" ;;
+    esac
+}
+
+case "$SUB" in
+    on)
+        _set_field enabled True > /dev/null
+        echo -e "${GREEN}✅ Bigloop aktiviert.${NC}"
+        ;;
+
+    off)
+        _set_field enabled False > /dev/null
+        echo -e "${YELLOW}⏸  Bigloop deaktiviert.${NC}"
+        ;;
+
+    interval)
+        SEC=$(_parse_seconds "$1")
+        if [ -z "$SEC" ]; then
+            echo -e "${RED}Usage: ella bigloop interval <sekunden|Nm|Nh>  (z.B. 900, 15m, 1h)${NC}"
+            exit 1
+        fi
+        _set_field interval_seconds "$SEC" > /dev/null
+        echo -e "${GREEN}✅ Bigloop-Intervall: ${SEC}s${NC}"
+        ;;
+
+    model)
+        if [ -z "$1" ]; then
+            echo -e "${RED}Usage: ella bigloop model <id>${NC}"
+            exit 1
+        fi
+        _set_field model_id "\"$1\"" > /dev/null
+        echo -e "${GREEN}✅ Bigloop-Reviewer-Modell: $1${NC}"
+        ;;
+
+    context)
+        TOK=$(_parse_tokens "$1")
+        if [ -z "$TOK" ]; then
+            echo -e "${RED}Usage: ella bigloop context <tokens|NK>  (z.B. 32000, 32K)${NC}"
+            exit 1
+        fi
+        _set_field context_cap_tokens "$TOK" > /dev/null
+        echo -e "${GREEN}✅ Bigloop-Kontext-Cap: ${TOK} Token${NC}"
+        ;;
+
+    status)
+        ENABLED=$(_load_field enabled false)
+        INTERVAL=$(_load_field interval_seconds 900)
+        MODEL=$(_load_field model_id 124)
+        CTX=$(_load_field context_cap_tokens 32000)
+        ROT=$(_load_field rotation_index 0)
+        LAST=$(_load_field last_run_at "noch nie")
+        echo -e "${BLUE}${BOLD}🔁 Bigloop Status${NC}"
+        if [ "$ENABLED" = "True" ]; then
+            echo -e "  Status:        ${GREEN}aktiv${NC}"
+        else
+            echo -e "  Status:        ${GREY}deaktiviert${NC}  (an mit: ella bigloop on)"
+        fi
+        echo -e "  Intervall:     ${INTERVAL}s"
+        echo -e "  Modell:        ${MODEL}"
+        echo -e "  Kontext-Cap:   ${CTX} Token"
+        echo -e "  Rotation-Idx:  ${ROT}"
+        echo -e "  Letzter Lauf:  ${GREY}${LAST}${NC}"
+        echo -e "  Laeuft nur, wenn keine 'Grosse Aufgabe' aktiv ist."
+        ;;
+
+    log)
+        if [ -f "$BIGLOOP_LOG" ]; then
+            tail -f "$BIGLOOP_LOG"
+        else
+            echo -e "${GREY}Noch kein Bigloop-Log vorhanden: $BIGLOOP_LOG${NC}"
+        fi
+        ;;
+
+    check)
+        PY_ARGS=()
+        for a in "$@"; do
+            case "$a" in --debug|--force) PY_ARGS+=("$a") ;; esac
+        done
+        if [[ " ${PY_ARGS[*]} " == *" --debug "* ]] || [[ " ${PY_ARGS[*]} " == *" --force "* ]]; then
+            OUT=$(bot_python3 "$BASE_DIR/ella-bigloop.py" check "${PY_ARGS[@]}" 2> >(tee -a "$BIGLOOP_LOG" >&2))
+        else
+            OUT=$(bot_python3 "$BASE_DIR/ella-bigloop.py" check "${PY_ARGS[@]}" 2>>"$BIGLOOP_LOG")
+        fi
+        [ -z "$OUT" ] && exit 0
+        while IFS=$'\t' read -r KIND SESSION PROMPT_FILE LABEL; do
+            [ "$KIND" = "FOLLOWUP" ] || continue
+            PROMPT=$(cat "$PROMPT_FILE" 2>/dev/null)
+            rm -f "$PROMPT_FILE"
+            [ -z "$PROMPT" ] && continue
+
+            _log "Bigloop-Verdacht in Session $SESSION: $LABEL"
+            echo -e "${YELLOW}🔁 Bigloop: möglicher Nachhak-Fall in $SESSION${NC}"
+            echo -e "${GREY}   $LABEL${NC}"
+
+            TASK_OUT=$(bot_python3 "$BASE_DIR/ella-task.py" show "$ELLA_TASK_FILE")
+            EX_STATUS=$(echo "$TASK_OUT" | grep '^STATUS:' | cut -d: -f2-)
+            EX_SESSION=$(echo "$TASK_OUT" | grep '^SESSION:' | cut -d: -f2-)
+            if [ "$EX_STATUS" != "in_progress" ] || [ "$EX_SESSION" = "$SESSION" ]; then
+                bot_python3 "$BASE_DIR/ella-task.py" set "$ELLA_TASK_FILE" "🔁 Bigloop-Nachhaken: $LABEL" "$SESSION" bigloop_followup > /dev/null
+            else
+                _log "Bigloop: Aufgabenspeicher belegt -- kein Tracking, nur Wiederanstossen"
+            fi
+
+            FULL_PROMPT="${PROMPT}
+
+(System-Hinweis: Dieser Nachhak-Vorschlag wurde automatisch von einem Reviewer-Modell erstellt, weil die Unterhaltung evtl. kein adäquates Ergebnis fuer den Nutzer geliefert hat. Ruf bitte regelmaessig \"ella task heartbeat\" auf, waehrend du nachhakst, und \"ella task done\", wenn du fertig bist.)"
+
+            # Eigene, klar erkennbare Nachricht VOR dem Reinject -- damit im
+            # Chat sichtbar ist, dass hier die Bigloop (nicht der Nutzer)
+            # eingegriffen hat, statt dass der Bot ploetzlich unerklaert
+            # etwas Neues sagt.
+            _notify_session "$SESSION" "🔁 [Automatische Nachprüfung] Mir ist aufgefallen, dass ich hier evtl. kein vollständiges Ergebnis geliefert habe — ich hake nochmal nach."
+            _reinject_task "$SESSION" "$FULL_PROMPT"
+        done <<< "$OUT"
+        ;;
+
+    --help|-h)
+        echo -e "${BLUE}${BOLD}🔁 ELLA BIGLOOP${NC}"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${GREEN}ella bigloop on/off${NC}        An-/Ausschalten (Standard: aus)"
+        echo -e "  ${GREEN}ella bigloop interval <n>${NC}  Intervall setzen (Sekunden, oder 15m/1h) — Standard 15m"
+        echo -e "  ${GREEN}ella bigloop model <id>${NC}    Reviewer-Modell setzen — Standard Gemma (124)"
+        echo -e "  ${GREEN}ella bigloop context <n>${NC}   Kontext-Cap setzen (Token, oder 32K) — Standard 32K"
+        echo -e "  ${GREEN}ella bigloop status${NC}        Aktuellen Stand anzeigen"
+        echo -e "  ${GREEN}ella bigloop log${NC}           Live-Log"
+        echo -e "  ${GREEN}ella bigloop check${NC}         Einmaliger Lauf (auch vom Watchdog-Timer mitgetickt)"
+        echo -e "${GREY}  Reviewt rotierend je eine Session pro faelligem Lauf, damit irgendwann${NC}"
+        echo -e "${GREY}  jede mal an der Reihe ist. Pausiert komplett, solange eine 'Grosse${NC}"
+        echo -e "${GREY}  Aufgabe' aktiv ist.${NC}"
+        ;;
+
+    *)
+        echo -e "${RED}❌ Unbekannter bigloop-Befehl: $SUB${NC}"
+        echo -e "   ella bigloop --help"
+        exit 1
+        ;;
+esac

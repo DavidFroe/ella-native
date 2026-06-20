@@ -17,11 +17,43 @@ source "$BASE_DIR/ella-core"
 STALE_MIN="${ELLA_WATCHDOG_STALE_MIN:-15}"
 RECOVERY_STALE_MIN="${ELLA_WATCHDOG_RECOVERY_STALE_MIN:-10}"
 SESSIONS_DIR="$BOT_USER_HOME/.openclaw/agents/main/sessions"
+WD_CONFIG_FILE="$BOT_USER_HOME/.ella_watchdog_config.json"
 SUB="${1:-check}"
 shift 2>/dev/null
 
 _log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$ELLA_WATCHDOG_LOG"
+}
+
+# --- Watchdog-eigene Einstellungen (on/off, Intervall, Definitiv-Modus) ---
+# Eigene kleine Config statt der fixen 5-Min-systemd-Timer-Tickrate, damit
+# "ella watchdog interval/definitive" sofort wirkt, ohne den Timer neu
+# installieren zu muessen. Der Timer selbst tickt fein (1 Min., siehe
+# "install") -- "check" entscheidet pro Aufruf selbst, ob das konfigurierte
+# Intervall schon abgelaufen ist.
+_wd_field() {
+    bot_python3 -c "
+import json
+try:
+    d = json.load(open('$WD_CONFIG_FILE'))
+except Exception:
+    d = {}
+print(d.get('$1', '$2'))
+" 2>/dev/null
+}
+
+_wd_set_field() {
+    bot_python3 -c "
+import json
+path = '$WD_CONFIG_FILE'
+try:
+    d = json.load(open(path))
+except Exception:
+    d = {}
+d['$1'] = $2
+with open(path, 'w') as f:
+    json.dump(d, f, indent=2)
+"
 }
 
 # Schickt eine Nachricht in die ursprüngliche Telegram-Session.
@@ -46,6 +78,16 @@ _ping_agent() {
     # Dieses Backend antwortet im Normalfall auch bei gesunder Last erst nach
     # 20-65s (siehe owltrail-Log) — ein zu knapper Timeout würde gesunde,
     # nur langsame Anfragen als "hängend" fehlinterpretieren.
+    if [ "$WD_DEBUG" = "1" ]; then
+        echo -e "${GREY}[watchdog-debug] sende: openclaw agent --session-key agent:main:watchdog-ping --message \"ping\"${NC}"
+        local out rc
+        out=$(timeout 100 "$OPENCLAW_BIN" agent --agent main --session-key "agent:main:watchdog-ping" \
+            --message "ping" --timeout 90 2>&1)
+        rc=$?
+        echo -e "${GREY}[watchdog-debug] exit=$rc${NC}"
+        echo -e "${GREY}[watchdog-debug] Antwort:\n----------------------------------------\n$out\n----------------------------------------${NC}"
+        return $rc
+    fi
     timeout 100 "$OPENCLAW_BIN" agent --agent main --session-key "agent:main:watchdog-ping" \
         --message "ping" --timeout 90 >/dev/null 2>&1
 }
@@ -140,6 +182,33 @@ except Exception:
 
 case "$SUB" in
     check)
+        WD_ENABLED=$(_wd_field enabled True)
+        if [ "$WD_ENABLED" = "False" ]; then
+            echo -e "${GREY}⏸  Watchdog deaktiviert.${NC}"
+            exit 0
+        fi
+
+        WD_INTERVAL=$(_wd_field interval_seconds 300)
+        WD_LAST_CHECK=$(_wd_field last_check_at "")
+        if [ -n "$WD_LAST_CHECK" ]; then
+            DUE=$(bot_python3 -c "
+import datetime
+try:
+    last = datetime.datetime.fromisoformat('$WD_LAST_CHECK')
+    elapsed = (datetime.datetime.now().astimezone() - last).total_seconds()
+    print('yes' if elapsed >= $WD_INTERVAL else 'no')
+except Exception:
+    print('yes')
+" 2>/dev/null)
+            if [ "$DUE" = "no" ]; then
+                exit 0
+            fi
+        fi
+        _wd_set_field last_check_at "\"$(date -Iseconds)\"" > /dev/null
+
+        # --- Bigloop mittickenen lassen (eigenstaendiges An/Aus + Intervall) ---
+        bash "$BASE_DIR/ella-bigloop" check >> "$ELLA_WATCHDOG_LOG" 2>&1
+
         # --- Kontext-Ueberlauf-Erkennung (eigenstaendig vom Task-Heartbeat) ---
         # Liest neue Zeilen im Gateway-Log seit dem letzten Check; erkennt
         # Sessions, die wiederholt an "Context is too large" haengen, lässt
@@ -160,6 +229,16 @@ case "$SUB" in
         if [ "$STATUS" != "in_progress" ]; then
             _log "OK — kein aktiver Auftrag (status=$STATUS)"
             echo -e "${GREEN}✅ Watchdog: kein aktiver Auftrag.${NC}"
+            if [ "$(_wd_field definitive_mode False)" = "True" ]; then
+                echo -e "${GREY}🔎 Definitiv-Modus: prüfe Lebenszeichen direkt...${NC}"
+                if _ping_agent; then
+                    _log "Definitiv-Ping erfolgreich (kein aktiver Auftrag)"
+                else
+                    _log "Definitiv-Ping OHNE Antwort (kein aktiver Auftrag) — starte Gateway neu"
+                    echo -e "${RED}🚨 Definitiv-Modus: Bot antwortet nicht — starte Gateway neu.${NC}"
+                    bash "$BASE_DIR/ella-openclaw" restart >> "$ELLA_WATCHDOG_LOG" 2>&1
+                fi
+            fi
             exit 0
         fi
 
@@ -224,8 +303,57 @@ case "$SUB" in
         fi
         ;;
 
+    on)
+        _wd_set_field enabled True > /dev/null
+        echo -e "${GREEN}✅ Watchdog aktiviert.${NC}"
+        ;;
+
+    off)
+        _wd_set_field enabled False > /dev/null
+        echo -e "${YELLOW}⏸  Watchdog deaktiviert.${NC}"
+        ;;
+
+    interval)
+        case "$1" in
+            *h) SEC=$(( ${1%h} * 3600 )) ;;
+            *m) SEC=$(( ${1%m} * 60 )) ;;
+            [0-9]*) SEC="$1" ;;
+            *) SEC="" ;;
+        esac
+        if [ -z "$SEC" ]; then
+            echo -e "${RED}Usage: ella watchdog interval <sekunden|Nm|Nh>  (z.B. 300, 5m, 1h)${NC}"
+            exit 1
+        fi
+        _wd_set_field interval_seconds "$SEC" > /dev/null
+        echo -e "${GREEN}✅ Watchdog-Intervall: ${SEC}s${NC}"
+        ;;
+
+    definitive)
+        case "$1" in
+            on)  _wd_set_field definitive_mode True > /dev/null
+                 echo -e "${GREEN}✅ Definitiv-Modus aktiviert — pingt den Bot bei jedem Check direkt an.${NC}" ;;
+            off) _wd_set_field definitive_mode False > /dev/null
+                 echo -e "${YELLOW}⏸  Definitiv-Modus deaktiviert.${NC}" ;;
+            *)   echo -e "${RED}Usage: ella watchdog definitive on|off${NC}"; exit 1 ;;
+        esac
+        ;;
+
     status)
+        WD_ENABLED_S=$(_wd_field enabled True)
+        WD_INTERVAL_S=$(_wd_field interval_seconds 300)
+        WD_DEFINITIVE_S=$(_wd_field definitive_mode False)
         echo -e "${BLUE}${BOLD}🐕 Watchdog Status${NC}"
+        if [ "$WD_ENABLED_S" = "True" ]; then
+            echo -e "  Status:        ${GREEN}aktiv${NC}"
+        else
+            echo -e "  Status:        ${GREY}deaktiviert${NC}  (an mit: ella watchdog on)"
+        fi
+        echo -e "  Intervall:     ${WD_INTERVAL_S}s"
+        if [ "$WD_DEFINITIVE_S" = "True" ]; then
+            echo -e "  Definitiv-Modus: ${GREEN}aktiv${NC} (pingt den Bot bei jedem Check direkt an)"
+        else
+            echo -e "  Definitiv-Modus: ${GREY}aus${NC}"
+        fi
         echo -e "  ${GREY}Schwelle: ${STALE_MIN} Min. ohne Heartbeat + Ping ohne Antwort = hängend${NC}"
         echo
         bash "$BASE_DIR/ella-task" show
@@ -245,7 +373,10 @@ case "$SUB" in
         ;;
 
     install)
-        echo -e "${CYAN}🐕 Installiere Watchdog-Timer (systemd --user, alle 5 Min.)...${NC}"
+        echo -e "${CYAN}🐕 Installiere Watchdog-Timer (systemd --user, Tick alle 60s)...${NC}"
+        echo -e "${GREY}   Tatsaechliche Pruef-Haeufigkeit von Watchdog UND Bigloop folgt ihren${NC}"
+        echo -e "${GREY}   eigenen Intervallen (ella watchdog interval / ella bigloop interval) --${NC}"
+        echo -e "${GREY}   der 60s-Tick ist nur die feinste moegliche Aufloesung dafuer.${NC}"
         UNIT_DIR="$BOT_USER_HOME/.config/systemd/user"
         bot_run "mkdir -p '$UNIT_DIR'"
 
@@ -258,11 +389,11 @@ Environment=HOME=$BOT_USER_HOME
 ExecStart=/bin/bash -lc \"source $BOT_USER_HOME/.nvm/nvm.sh 2>/dev/null; $BASE_DIR/ella-watchdog check\"
 "
         TIMER_CONTENT="[Unit]
-Description=Ella Watchdog Timer (alle 5 Minuten)
+Description=Ella Watchdog Timer (Tick alle 60s, eigentliches Intervall via 'ella watchdog interval')
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
+OnBootSec=1min
+OnUnitActiveSec=60s
 Persistent=true
 
 [Install]
@@ -279,11 +410,16 @@ WantedBy=timers.target
     --help|-h)
         echo -e "${BLUE}${BOLD}🐕 ELLA WATCHDOG${NC}"
         echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "  ${GREEN}ella watchdog check${NC}     Einmaliger Check (auch vom Timer genutzt)"
-        echo -e "  ${GREEN}ella watchdog status${NC}    Aktueller Task + letzte Watchdog-Einträge"
-        echo -e "  ${GREEN}ella watchdog log${NC}       Live-Log"
-        echo -e "  ${GREEN}ella watchdog install${NC}   Timer installieren (alle 5 Min., persistent über Reboot)"
+        echo -e "  ${GREEN}ella watchdog on/off${NC}         An-/Ausschalten (Standard: an)"
+        echo -e "  ${GREEN}ella watchdog interval <n>${NC}   Pruef-Intervall (Sekunden, oder 5m/1h) — Standard 300s"
+        echo -e "  ${GREEN}ella watchdog definitive on/off${NC}  Bei jedem Check direkt eine echte Ping-Nachricht senden"
+        echo -e "                                  (statt nur Prozess/Port zu pruefen) — sicherer, aber kostet Token"
+        echo -e "  ${GREEN}ella watchdog check${NC}          Einmaliger Check (auch vom Timer genutzt)"
+        echo -e "  ${GREEN}ella watchdog status${NC}         Konfiguration + aktueller Task + letzte Einträge"
+        echo -e "  ${GREEN}ella watchdog log${NC}            Live-Log"
+        echo -e "  ${GREEN}ella watchdog install${NC}        Timer installieren (Tick 60s, persistent über Reboot)"
         echo -e "${GREY}  Bei Hänger: Neustart + automatischer Retry (max. ${ELLA_WATCHDOG_MAX_RETRIES:-2}x, dann Aufgabe -> failed)${NC}"
+        echo -e "${GREY}  Bigloop (eigenstaendige Session-Review-Schleife): ella bigloop --help${NC}"
         ;;
 
     *)

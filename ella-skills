@@ -31,16 +31,23 @@ GREEN='\033[32m'; GREY='\033[90m'; YELLOW='\033[33m'; RED='\033[31m'; R='\033[0m
 verbose = '$VERBOSE' == '1'
 
 skills = []
-proc = subprocess.run(['$OPENCLAW_BIN', 'skills', 'list', '--json'],
-                       capture_output=True, text=True, timeout=20)
+proc = None
 try:
+    proc = subprocess.run(['$OPENCLAW_BIN', 'skills', 'list', '--json'],
+                           capture_output=True, text=True, timeout=60)
     skills = json.loads(proc.stdout).get('skills', [])
+except subprocess.TimeoutExpired:
+    print(f'{RED}❌ Konnte Skill-Liste nicht laden: Zeitueberschreitung (>60s).{R}')
+    print(f'{GREY}   Befehl: $OPENCLAW_BIN skills list --json{R}')
 except Exception as e:
     print(f'{RED}❌ Konnte Skill-Liste nicht laden: {e}{R}')
-    print(f'{GREY}   Befehl: $OPENCLAW_BIN skills list --json (exit={proc.returncode}){R}')
-    if proc.stderr.strip():
+    if proc is None:
+        print(f'{GREY}   Befehl konnte gar nicht gestartet werden: $OPENCLAW_BIN skills list --json{R}')
+    else:
+        print(f'{GREY}   Befehl: $OPENCLAW_BIN skills list --json (exit={proc.returncode}){R}')
+    if proc is not None and proc.stderr.strip():
         print(f'{GREY}   stderr: {proc.stderr.strip()[:500]}{R}')
-    if proc.stdout.strip():
+    if proc is not None and proc.stdout.strip():
         print(f'{GREY}   stdout: {proc.stdout.strip()[:300]}{R}')
 
 def row(s):

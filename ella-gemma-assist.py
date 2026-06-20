@@ -19,6 +19,7 @@ Aufrufe:
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -45,27 +46,42 @@ def read_gemma3_config():
     return defaults
 
 
-def ask_gemma(system_content, user_content, max_chars):
+def ask_gemma(system_content, user_content, max_chars, model_id=None, retries=2):
+    # Das Backend antwortet vereinzelt mit Status 200 aber leerem Body (kein
+    # Logikfehler hier, beobachtete Flakiness) -- kurzer Retry statt sofort
+    # aufzugeben.
     cfg = read_gemma3_config()
     if len(user_content) > max_chars:
         user_content = "[...gekuerzt...]\n" + user_content[-max_chars:]
     body = json.dumps({
-        "model": cfg["model_id"],
+        "model": model_id or cfg["model_id"],
         "stream": False,
         "messages": [
             {"role": "system", "content": system_content},
             {"role": "user", "content": user_content},
         ],
     }).encode()
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{owltrail_port()}/v1/chat/completions",
-        data=body,
-        headers={"Content-Type": "application/json", "Authorization": "Bearer ella"},
-        method="POST",
-    )
-    resp = urllib.request.urlopen(req, timeout=120)
-    data = json.loads(resp.read())
-    return data["choices"][0]["message"]["content"].strip()
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{owltrail_port()}/v1/chat/completions",
+                data=body,
+                headers={"Content-Type": "application/json", "Authorization": "Bearer ella"},
+                method="POST",
+            )
+            resp = urllib.request.urlopen(req, timeout=120)
+            raw = resp.read()
+            if not raw.strip():
+                raise json.JSONDecodeError("empty response body", "", 0)
+            data = json.loads(raw)
+            return data["choices"][0]["message"]["content"].strip()
+        except (json.JSONDecodeError, KeyError, urllib.error.URLError) as e:
+            last_err = e
+            if attempt < retries:
+                time.sleep(2)
+                continue
+            raise last_err
 
 
 def analyze_crash(tail_text):
@@ -99,9 +115,35 @@ def judge_done(task_text, reply_tail):
     return ask_gemma(system_content, user_content, cap_chars)
 
 
+def review_session(transcript_text, model_id=None, context_cap_tokens=None):
+    """Lässt das Reviewer-Modell beurteilen, ob eine Session fuer den Nutzer
+    zufriedenstellend abgeschlossen aussieht, oder ob der Bot wahrscheinlich
+    kein adäquates Ergebnis geliefert hat und nachgehakt werden sollte.
+
+    Antwortformat (erste Zeile): OK  ODER  FOLLOWUP
+    Bei FOLLOWUP folgt ab Zeile 2 ein konkreter Fortsetzungs-Prompt fuer den Bot."""
+    cap_chars = int(context_cap_tokens or read_gemma3_config()["context_cap_tokens"]) * 3
+    system_content = (
+        "Du bewertest eine abgeschlossene oder zumindest pausierte Chat-Unterhaltung zwischen "
+        "einem KI-Assistenten (Klauski) und einem Nutzer. Du bekommst den (ggf. am Anfang "
+        "gekuerzten) Verlauf -- das Ende des Verlaufs ist der aktuellste Stand. "
+        "Frage dich: Sieht das fuer den Nutzer nach einem zufriedenstellend abgeschlossenen "
+        "Anliegen aus, oder hat der Assistent wahrscheinlich KEIN adäquates Ergebnis fuer das "
+        "geliefert, was der Nutzer eigentlich wollte (z.B. abgebrochen, ausgewichen, "
+        "offensichtlich falsch verstanden, eine Zwischenfrage nie beantwortet)? "
+        "Sei zurueckhaltend mit FOLLOWUP -- nur bei klaren Anzeichen, nicht bei jeder kurzen "
+        "oder informellen Unterhaltung. "
+        "Antworte auf der ERSTEN Zeile NUR mit dem Wort OK oder FOLLOWUP (nichts anderes auf "
+        "dieser Zeile). Bei FOLLOWUP schreib AB DER ZWEITEN ZEILE einen kurzen, konkreten "
+        "Fortsetzungs-Prompt fuer Klauski (du-Form), der beschreibt was fehlt/offen blieb "
+        "und was er als naechstes tun soll, um es nachzuholen."
+    )
+    return ask_gemma(system_content, transcript_text, cap_chars, model_id=model_id)
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: ella-gemma-assist.py <analyze-crash|judge-done> ...", file=sys.stderr)
+        print("Usage: ella-gemma-assist.py <analyze-crash|judge-done|review-session> ...", file=sys.stderr)
         sys.exit(1)
     mode = sys.argv[1]
     try:
@@ -116,6 +158,13 @@ def main():
             with open(reply_file, encoding="utf-8") as f:
                 reply_tail = f.read()
             print(judge_done(task_text, reply_tail))
+        elif mode == "review-session":
+            transcript_file = sys.argv[2]
+            model_id = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+            context_cap = int(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
+            with open(transcript_file, encoding="utf-8") as f:
+                transcript_text = f.read()
+            print(review_session(transcript_text, model_id=model_id, context_cap_tokens=context_cap))
         else:
             print(f"Unbekannter Modus: {mode}", file=sys.stderr)
             sys.exit(1)
