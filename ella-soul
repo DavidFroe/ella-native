@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# ================================================================
+# ELLA SOUL — Bot-Identität/Persona verwalten (IDENTITY.md)
+#
+# Die "Seele" des Bots: Name, Vibe, Verhalten je Alkoholstufe usw.
+# Wird vom Workspace gelesen, wenn der Bot eine Session startet.
+# Auf frischen Installationen existiert noch keine -- der Bot "weiss
+# nicht, wer er ist", bis hier eine Identität gesetzt wird.
+# ================================================================
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source "$BASE_DIR/ella-core"
+
+IDENTITY_FILE="$BOT_USER_HOME/.openclaw/workspace/IDENTITY.md"
+SUB="${1:-show}"
+shift 2>/dev/null
+
+case "$SUB" in
+    show|cat)
+        if bot_run "[ -f '$IDENTITY_FILE' ]"; then
+            bot_run "cat '$IDENTITY_FILE'"
+        else
+            echo -e "${YELLOW}⚠️  Keine Identität gesetzt (${IDENTITY_FILE} existiert nicht).${NC}"
+            echo -e "${GREY}   Anlegen: ella soul edit   (interaktiv im Editor)${NC}"
+            echo -e "${GREY}   Oder:    ella soul set < meine-identity.md   (Datei reinkopieren)${NC}"
+        fi
+        ;;
+
+    edit)
+        bot_run "mkdir -p '$(dirname "$IDENTITY_FILE")'"
+        EDITOR_BIN="${EDITOR:-nano}"
+        if [ "$BOT_USER" = "$(whoami)" ]; then
+            "$EDITOR_BIN" "$IDENTITY_FILE"
+        else
+            sudo -u "$BOT_USER" "$EDITOR_BIN" "$IDENTITY_FILE"
+        fi
+        echo -e "${GREEN}✅ Identität gespeichert: $IDENTITY_FILE${NC}"
+        ;;
+
+    set)
+        echo -e "${CYAN}📋 Neue Identität einfügen oder einpasten — danach Enter + Strg+D (EOF):${NC}"
+        echo -e "${GREY}   (Oder per Datei: ella soul set < meine-identity.md)${NC}"
+        TMP=$(mktemp)
+        cat > "$TMP"
+        if [ ! -s "$TMP" ]; then
+            echo -e "${RED}❌ Nichts erhalten — abgebrochen, Identität unveraendert.${NC}"
+            rm -f "$TMP"
+            exit 1
+        fi
+        chmod 644 "$TMP"
+        bot_run "mkdir -p '$(dirname "$IDENTITY_FILE")'"
+        if bot_run "cp '$TMP' '$IDENTITY_FILE'"; then
+            echo -e "${GREEN}✅ Identität gespeichert: $IDENTITY_FILE${NC}"
+        else
+            echo -e "${RED}❌ Speichern fehlgeschlagen — Identität unveraendert.${NC}"
+            rm -f "$TMP"
+            exit 1
+        fi
+        rm -f "$TMP"
+        ;;
+
+    clear|delete|rm)
+        if ! bot_run "[ -f '$IDENTITY_FILE' ]"; then
+            echo -e "${GREY}Keine Identität vorhanden — nichts zu löschen.${NC}"
+            exit 0
+        fi
+        echo -n "Identität wirklich löschen? [j/N]: "
+        read -r CONFIRM
+        if [[ "$CONFIRM" =~ ^[jJ]$ ]]; then
+            bot_run "rm -f '$IDENTITY_FILE'"
+            echo -e "${GREEN}✅ Identität gelöscht.${NC}"
+        else
+            echo -e "${GREY}Abgebrochen.${NC}"
+        fi
+        ;;
+
+    --help|-h)
+        echo -e "${BLUE}${BOLD}👻 ELLA SOUL — Bot-Identität (IDENTITY.md)${NC}"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${GREEN}ella soul show${NC}              Aktuelle Identität anzeigen"
+        echo -e "  ${GREEN}ella soul edit${NC}               Interaktiv im Editor bearbeiten (\$EDITOR, sonst nano)"
+        echo -e "  ${GREEN}ella soul set${NC}                Komplett ersetzen — einfuegen/pasten, dann Strg+D"
+        echo -e "  ${GREEN}ella soul set < datei.md${NC}     Komplett ersetzen — aus Datei"
+        echo -e "  ${GREEN}ella soul clear${NC}              Identität löschen (mit Bestätigung)"
+        ;;
+
+    *)
+        echo -e "${RED}❌ Unbekannter soul-Befehl: $SUB${NC}"
+        echo -e "   ella soul --help"
+        exit 1
+        ;;
+esac

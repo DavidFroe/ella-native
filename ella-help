@@ -47,6 +47,10 @@ echo -e "  ${CYAN}ella web install${NC}                  Webseite als Autostart-
 echo -e "  ${CYAN}ella alcohol show${NC}                 Klauskis Alkoholstand anzeigen"
 echo -e "  ${CYAN}ella alcohol burn [n]${NC}             Alkohol verbrennen (Default: 1)"
 echo -e "  ${CYAN}ella alcohol add [n]${NC}              Alkohol hinzufügen (Default: 1)"
+echo -e "  ${CYAN}ella soul show${NC}                    Bot-Identität (IDENTITY.md) anzeigen"
+echo -e "  ${CYAN}ella soul edit${NC}                     Identität interaktiv im Editor bearbeiten"
+echo -e "  ${CYAN}ella soul set${NC}                      Identität komplett ersetzen (einfügen/pasten oder < datei.md)"
+echo -e "  ${CYAN}ella soul clear${NC}                    Identität löschen"
 
 echo -e "\n${BOLD}🐾 OPENCLAW  — Agent-Gateway, Channels, Sessions:${NC}"
 echo -e "  ${GREEN}ella openclaw status${NC}          Gateway-Prozess & Verbindung prüfen"

@@ -7,7 +7,7 @@ COMMAND="$1"
 # 1. SMART DIRECT ASK (Nativ)
 if [[ "$COMMAND" != --* ]] && [ -n "$COMMAND" ]; then
     case "$COMMAND" in
-        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|watchdog|web|alcohol|sessions|tele|models|context|timeout|test-llm|version|channel|whatsapp|wa|telegram|tg|owltrail|openclaw|gateway|repair|quiteque|qq|deepthink|update)
+        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|watchdog|web|alcohol|soul|sessions|tele|models|context|timeout|test-llm|version|channel|whatsapp|wa|telegram|tg|owltrail|openclaw|gateway|repair|quiteque|qq|deepthink|update)
             COMMAND="--$COMMAND"
             ;;
         *)
@@ -245,6 +245,11 @@ case "$COMMAND" in
     # --- ALKOHOLSTAND (Klauski) ---
     --alcohol)
         bash "$BASE_DIR/ella-alcohol" "$@"
+        ;;
+
+    # --- BOT-IDENTITÄT / PERSONA ---
+    --soul)
+        bash "$BASE_DIR/ella-soul" "$@"
         ;;
 
     # --- QUITEQUE MIDDLEWARE ---
