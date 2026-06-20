@@ -51,6 +51,11 @@ echo -e "  ${CYAN}ella soul show${NC}                    Bot-Identität (IDENTIT
 echo -e "  ${CYAN}ella soul edit${NC}                     Identität interaktiv im Editor bearbeiten"
 echo -e "  ${CYAN}ella soul set${NC}                      Identität komplett ersetzen (einfügen/pasten oder < datei.md)"
 echo -e "  ${CYAN}ella soul clear${NC}                    Identität löschen"
+echo -e "  ${CYAN}ella skills list${NC}                   Bot-Skills mit Status anzeigen"
+echo -e "  ${CYAN}ella skills show <name>${NC}            Skill-Inhalt anzeigen"
+echo -e "  ${CYAN}ella skills edit <name>${NC}            Skill im Editor bearbeiten"
+echo -e "  ${CYAN}ella skills create <name>${NC}          Neues Skill-Gerüst anlegen"
+echo -e "  ${CYAN}ella skills delete <name>${NC}          Skill löschen"
 
 echo -e "\n${BOLD}🐾 OPENCLAW  — Agent-Gateway, Channels, Sessions:${NC}"
 echo -e "  ${GREEN}ella openclaw status${NC}          Gateway-Prozess & Verbindung prüfen"

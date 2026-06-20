@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# ================================================================
+# ELLA SKILLS — Skills im Bot-Workspace ansehen, anlegen, bearbeiten,
+# löschen.
+#
+# Skills sind Markdown-Ordner unter ~/.openclaw/workspace/skills/<name>/
+# SKILL.md, die der Bot je nach Situation selbst zieht. Dieses Kommando
+# macht sie von der CLI aus verwaltbar, statt sie nur per Hand im
+# Dateisystem anzufassen.
+# ================================================================
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source "$BASE_DIR/ella-core"
+
+SKILLS_DIR="$BOT_USER_HOME/.openclaw/workspace/skills"
+SUB="${1:-list}"
+shift 2>/dev/null
+NAME="$1"
+
+case "$SUB" in
+    list|ls|show_all)
+        echo -e "${BLUE}${BOLD}🧩 Skills in $SKILLS_DIR${NC}"
+        bot_python3 -c "
+import json, os, subprocess
+
+GREEN='\033[32m'; GREY='\033[90m'; RED='\033[31m'; R='\033[0m'; BOLD='\033[1m'
+
+skills_dir = '$SKILLS_DIR'
+on_disk = sorted(os.listdir(skills_dir)) if os.path.isdir(skills_dir) else []
+
+eligible = {}
+try:
+    out = subprocess.run(['$OPENCLAW_BIN', 'skills', 'list', '--json'],
+                          cwd=os.path.dirname(skills_dir), capture_output=True, text=True, timeout=20).stdout
+    data = json.loads(out)
+    for s in data.get('skills', []):
+        eligible[s.get('name')] = s
+except Exception:
+    pass
+
+if not on_disk:
+    print(f'  {GREY}Keine Skills vorhanden — ella skills create <name> zum Anlegen.{R}')
+else:
+    for name in on_disk:
+        path = os.path.join(skills_dir, name, 'SKILL.md')
+        if not os.path.isfile(path):
+            continue
+        info = eligible.get(name, {})
+        status = f'{GREEN}✓ aktiv{R}' if info.get('eligible') else f'{GREY}inaktiv{R}'
+        emoji = info.get('emoji', '🧩')
+        desc = info.get('description', '')
+        if not desc:
+            try:
+                with open(path, encoding='utf-8') as f:
+                    for line in f:
+                        if line.lower().startswith('description:'):
+                            desc = line.split(':', 1)[1].strip().strip('\"')
+                            break
+            except Exception:
+                pass
+        print(f'  {emoji} {BOLD}{name}{R}  [{status}]')
+        if desc:
+            print(f'      {GREY}{desc[:100]}{R}')
+"
+        ;;
+
+    show|cat)
+        if [ -z "$NAME" ]; then
+            echo -e "${RED}Usage: ella skills show <name>${NC}"
+            exit 1
+        fi
+        if bot_run "[ -f '$SKILLS_DIR/$NAME/SKILL.md' ]"; then
+            bot_run "cat '$SKILLS_DIR/$NAME/SKILL.md'"
+        else
+            echo -e "${RED}❌ Skill '$NAME' nicht gefunden.${NC}"
+            exit 1
+        fi
+        ;;
+
+    edit)
+        if [ -z "$NAME" ]; then
+            echo -e "${RED}Usage: ella skills edit <name>${NC}"
+            exit 1
+        fi
+        bot_run "mkdir -p '$SKILLS_DIR/$NAME'"
+        EDITOR_BIN="${EDITOR:-nano}"
+        if [ "$BOT_USER" = "$(whoami)" ]; then
+            "$EDITOR_BIN" "$SKILLS_DIR/$NAME/SKILL.md"
+        else
+            sudo -u "$BOT_USER" "$EDITOR_BIN" "$SKILLS_DIR/$NAME/SKILL.md"
+        fi
+        echo -e "${GREEN}✅ Skill gespeichert: $NAME${NC}"
+        ;;
+
+    create|new)
+        if [ -z "$NAME" ]; then
+            echo -e "${RED}Usage: ella skills create <name>${NC}"
+            exit 1
+        fi
+        if bot_run "[ -f '$SKILLS_DIR/$NAME/SKILL.md' ]"; then
+            echo -e "${YELLOW}⚠️  Skill '$NAME' existiert schon — nutze 'ella skills edit $NAME'.${NC}"
+            exit 1
+        fi
+        bot_run "mkdir -p '$SKILLS_DIR/$NAME'"
+        TMP=$(mktemp)
+        cat > "$TMP" << EOSKILL
+---
+name: $NAME
+description: "TODO: wann soll dieser Skill gezogen werden? Konkrete Stichworte helfen dem Modell."
+---
+
+# $NAME
+
+TODO: Beschreibe hier, was der Bot in dieser Situation tun soll.
+EOSKILL
+        chmod 644 "$TMP"
+        bot_run "cp '$TMP' '$SKILLS_DIR/$NAME/SKILL.md'"
+        rm -f "$TMP"
+        echo -e "${GREEN}✅ Skill-Gerüst angelegt: $SKILLS_DIR/$NAME/SKILL.md${NC}"
+        echo -ne "   Jetzt im Editor ausfüllen? [J/n]: "
+        read -r DOEDIT
+        if [[ ! "$DOEDIT" =~ ^[nN]$ ]]; then
+            "$0" edit "$NAME"
+        fi
+        ;;
+
+    delete|rm)
+        if [ -z "$NAME" ]; then
+            echo -e "${RED}Usage: ella skills delete <name>${NC}"
+            exit 1
+        fi
+        if ! bot_run "[ -d '$SKILLS_DIR/$NAME' ]"; then
+            echo -e "${GREY}Skill '$NAME' existiert nicht — nichts zu löschen.${NC}"
+            exit 0
+        fi
+        echo -n "Skill '$NAME' wirklich löschen? [j/N]: "
+        read -r CONFIRM
+        if [[ "$CONFIRM" =~ ^[jJ]$ ]]; then
+            bot_run "rm -rf '$SKILLS_DIR/$NAME'"
+            echo -e "${GREEN}✅ Skill '$NAME' gelöscht.${NC}"
+        else
+            echo -e "${GREY}Abgebrochen.${NC}"
+        fi
+        ;;
+
+    --help|-h)
+        echo -e "${BLUE}${BOLD}🧩 ELLA SKILLS — Bot-Skills verwalten${NC}"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${GREEN}ella skills list${NC}            Alle Skills mit Status anzeigen"
+        echo -e "  ${GREEN}ella skills show <name>${NC}     SKILL.md-Inhalt anzeigen"
+        echo -e "  ${GREEN}ella skills edit <name>${NC}     Im Editor bearbeiten (\$EDITOR, sonst nano)"
+        echo -e "  ${GREEN}ella skills create <name>${NC}   Neues Skill-Gerüst anlegen"
+        echo -e "  ${GREEN}ella skills delete <name>${NC}   Skill löschen (mit Bestätigung)"
+        ;;
+
+    *)
+        echo -e "${RED}❌ Unbekannter skills-Befehl: $SUB${NC}"
+        echo -e "   ella skills --help"
+        exit 1
+        ;;
+esac
