@@ -81,12 +81,24 @@ def task_is_active():
 
 
 def list_session_keys():
+    """Nur Sessions, die ueberhaupt eine echte Zustellmoeglichkeit haben.
+
+    OpenClaws eigener "embedded fallback"-Mechanismus (bei Gateway-Timeout)
+    erzeugt interne Sessions wie agent:main:explicit:gateway-fallback-... --
+    die haben KEINE channel-/route-/lastChannel-Metadaten und sind eine
+    Sackgasse: alles, was Klauski dort schreibt/tut, kann gar nicht beim
+    Nutzer ankommen. So eine Session als Review-Kandidat zu nehmen fuehrt
+    bestenfalls zu Leerlauf, schlimmstenfalls zu nutzlosen Nachhak-Schleifen
+    gegen eine Session, die niemand je sehen wird."""
     try:
         with open(os.path.join(SESSIONS_DIR, "sessions.json"), encoding="utf-8") as f:
             store = json.load(f)
     except Exception:
         return []
-    return sorted(k for k in store.keys() if k not in SKIP_KEYS)
+    return sorted(
+        k for k, v in store.items()
+        if k not in SKIP_KEYS and (v.get("channel") or v.get("lastChannel"))
+    )
 
 
 def session_id_for(key):

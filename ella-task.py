@@ -21,6 +21,7 @@ EMPTY = {
     "retry_count": 0,
     "kind": None,
     "last_nudge_at": None,
+    "escalation_tier": 0,
 }
 
 
@@ -106,6 +107,24 @@ def main():
         save(path, data)
         print("OK")
 
+    elif mode == "escalate":
+        # Stufe-2-Eskalation: alte (zu grosse/kaputte) Session wurde geleert,
+        # Gemma hat eine Zusammenfassung + Fortsetzungs-Prompt geliefert.
+        # retry_count faengt fuer diese neue Stufe wieder bei 0 an (eigene
+        # 3 Versuche), escalation_tier zaehlt hoch, damit ein zweites
+        # Scheitern NICHT erneut eskaliert, sondern endgueltig aufgibt.
+        new_task_text = rest[0] if rest else ""
+        data = load(path)
+        data["task"] = new_task_text
+        data["retry_count"] = 0
+        data["escalation_tier"] = int(data.get("escalation_tier") or 0) + 1
+        data["status"] = "in_progress"
+        data["last_heartbeat"] = now_iso()
+        data["last_nudge_at"] = now_iso()
+        data["recovered_at"] = now_iso()
+        save(path, data)
+        print(data["escalation_tier"])
+
     elif mode == "show":
         data = load(path)
         status = data.get("status", "none")
@@ -113,6 +132,7 @@ def main():
         print(f"RETRY_COUNT:{data.get('retry_count', 0)}")
         print(f"KIND:{data.get('kind') or ''}")
         print(f"LAST_NUDGE_AT:{data.get('last_nudge_at') or ''}")
+        print(f"ESCALATION_TIER:{data.get('escalation_tier', 0)}")
         if status == "in_progress" and data.get("task"):
             hb = data.get("last_heartbeat")
             age_min = -1

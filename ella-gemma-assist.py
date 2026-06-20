@@ -94,7 +94,12 @@ def analyze_crash(tail_text):
         "die Aufgabe fertig wurde. Deine Aufgabe: Lies den Verlauf und schreibe einen kurzen, "
         "klaren Fortsetzungs-Prompt, mit dem Klauski GENAU an der Stelle weiterarbeiten kann, "
         "an der es abgerissen ist. Nenne konkret: worum es geht, was schon erledigt ist, was "
-        "noch fehlt. Schreib NUR den Fortsetzungs-Prompt selbst (als Anweisung an Klauski, "
+        "noch fehlt. WICHTIG: der alte Chat-Verlauf wird zusammen mit dieser Wiederaufnahme "
+        "GELOESCHT (nicht aber Dateien auf der Festplatte) -- Klauski hat danach KEIN eigenes "
+        "Gedaechtnis mehr an Details aus dem alten Verlauf. Nenne deshalb UNBEDINGT alle "
+        "konkreten Datei-/Ordnerpfade, Dateinamen, IDs oder sonstigen Details, die er braucht, "
+        "um mit denselben Dateien/Ressourcen weiterzuarbeiten -- sonst kann er sie nicht "
+        "wiederfinden. Schreib NUR den Fortsetzungs-Prompt selbst (als Anweisung an Klauski, "
         "du-Form), keine Meta-Kommentare, keine Ueberschriften, kein Praeamble."
     )
     return ask_gemma(system_content, tail_text, cap_chars)

@@ -144,6 +144,108 @@ _do_crash_recovery() {
     _notify_session "$session" "⚠️ Ich bin wegen eines Kontext-Ueberlaufs abgestuerzt. Hab den Verlauf analysiert und mache automatisch weiter: $label"
 }
 
+# Eskalationsstufe 2 fuer eine automatische Aufgabe (Bigloop/Crash-Recovery),
+# die trotz MAX_RETRIES normaler Anstoesse nicht vorankam: es gibt keinen
+# eigenstaendigen "Compact"-Befehl in OpenClaw (Kompaktierung passiert nur
+# intern waehrend eines Agentenlaufs und wurde dabei bereits wiederholt
+# beobachtet zu scheitern) -- also der naechste sinnvolle Schritt: Gemma
+# fasst die GESAMTE Session zusammen (inkl. konkreter Datei-/Pfadangaben,
+# siehe analyze_crash-Prompt), die alte (zu grosse/kaputte) Session wird
+# geleert (NUR das Gespraechsprotokoll -- hochgeladene/erzeugte Dateien auf
+# der Platte bleiben unberuehrt), und Klauski bekommt die Zusammenfassung
+# als frischen Start. Gibt 0 bei Erfolg, 1 bei Fehlschlag (Aufrufer faengt
+# das endgueltige Aufgeben ab).
+_escalate_to_summary() {
+    local session="$1" original_task="$2" tmp summary
+    _log "Eskaliere auf Stufe 2 (Gemma-Zusammenfassung + Session-Reset) fuer $session"
+    echo -e "${RED}🆘 Mehrere Anstoesse erfolglos -- eskaliere: Gemma fasst zusammen, Session wird zurueckgesetzt.${NC}"
+
+    tmp=$(bot_run "mktemp -p '$BOT_USER_HOME' .ella_escalate_tail_XXXXXX" 2>/dev/null)
+    if [ -z "$tmp" ]; then
+        _log "Eskalation abgebrochen: kein Temp-File anlegbar"
+        return 1
+    fi
+
+    # Sauberes Dialog-Transkript (nur user/assistant Text, keine rohen
+    # Tool-Ergebnisse) -- aus demselben Grund wie in ella-bigloop.py:
+    # Tool-Resultate tokenisieren viel dichter als Flieshtext und liessen
+    # Gemma-Aufrufe bei dieser Art Inhalt bereits zuvor scheitern.
+    bot_python3 -c "
+import json, os, sys
+sessions_dir, key = sys.argv[1], sys.argv[2]
+try:
+    with open(os.path.join(sessions_dir, 'sessions.json'), encoding='utf-8') as f:
+        store = json.load(f)
+    sid = store.get(key, {}).get('sessionId')
+    if not sid:
+        sys.exit(1)
+    path = os.path.join(sessions_dir, sid + '.jsonl')
+    lines_out = []
+    with open(path, encoding='utf-8', errors='replace') as f:
+        for raw_line in f:
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                d = json.loads(raw_line)
+            except Exception:
+                continue
+            msg = d.get('message', {})
+            role = msg.get('role')
+            if role not in ('user', 'assistant'):
+                continue
+            content = msg.get('content')
+            text_parts = []
+            if isinstance(content, str):
+                text_parts.append(content)
+            elif isinstance(content, list):
+                for c in content:
+                    if isinstance(c, dict) and c.get('type') == 'text':
+                        text_parts.append(c.get('text', ''))
+            text = chr(10).join(t for t in text_parts if t).strip()
+            if text:
+                lines_out.append(role + ': ' + text)
+    full = chr(10).join(lines_out)
+    if len(full) > 40000:
+        full = '[...gekuerzt...]\n' + full[-40000:]
+    sys.stdout.write(full)
+except Exception:
+    sys.exit(1)
+" "$SESSIONS_DIR" "$session" > "$tmp" 2>/dev/null
+
+    if [ ! -s "$tmp" ]; then
+        bot_run "rm -f '$tmp'" 2>/dev/null
+        _log "Eskalation abgebrochen: kein Transkript extrahierbar fuer $session"
+        return 1
+    fi
+
+    summary=$(bot_python3 "$BASE_DIR/ella-gemma-assist.py" analyze-crash "$tmp" 2>>"$ELLA_WATCHDOG_LOG")
+    bot_run "rm -f '$tmp'" 2>/dev/null
+    if [ -z "$summary" ]; then
+        _log "Eskalation abgebrochen: Gemma hat keine Zusammenfassung geliefert fuer $session"
+        return 1
+    fi
+    _log "Gemma-Zusammenfassung erhalten (${#summary} Zeichen) fuer $session"
+
+    bot_python3 "$BASE_DIR/ella-session-clear.py" "$SESSIONS_DIR" "$session" >> "$ELLA_WATCHDOG_LOG" 2>&1
+
+    local full_task="🆘 [Eskalation: Neustart mit Zusammenfassung] ${original_task}
+
+Zusammenfassung der bisherigen (aus Platzgruenden zurueckgesetzten) Unterhaltung:
+${summary}
+
+(System-Hinweis: Diese Wiederaufnahme wird automatisch ueberwacht. Ruf bitte regelmaessig \"ella task heartbeat\" auf, waehrend du arbeitest, und \"ella task done\", wenn du fertig bist.)"
+
+    bot_python3 "$BASE_DIR/ella-task.py" escalate "$ELLA_TASK_FILE" "$full_task" > /dev/null
+
+    echo -e "${YELLOW}🔄 Starte Gateway neu...${NC}"
+    bash "$BASE_DIR/ella-openclaw" restart >> "$ELLA_WATCHDOG_LOG" 2>&1
+
+    _notify_session "$session" "🆘 Ich komme mit dem bisherigen Verlauf nicht weiter (Kontext zu gross/instabil). Hab eine Zusammenfassung erstellt, die alte Unterhaltung zurueckgesetzt und starte damit nochmal frisch."
+    _reinject_task "$session" "$full_task"
+    return 0
+}
+
 # Prueft, ob die Session seit dem letzten Anstoss (last_nudge_at) ueberhaupt
 # eine neue Nachricht bekommen hat. Gibt "NEW" (etwas Neues -> Gemma fragen
 # lohnt sich), "SAME" (nichts Neues -> Gemma-Abfrage waere sinnlos) oder
@@ -296,7 +398,9 @@ except Exception:
         RETRY_COUNT="${RETRY_COUNT:-0}"
         KIND=$(echo "$OUT" | grep '^KIND:' | cut -d: -f2-)
         LAST_NUDGE_AT=$(echo "$OUT" | grep '^LAST_NUDGE_AT:' | cut -d: -f2-)
-        MAX_RETRIES="${ELLA_WATCHDOG_MAX_RETRIES:-2}"
+        ESCALATION_TIER=$(echo "$OUT" | grep '^ESCALATION_TIER:' | cut -d: -f2-)
+        ESCALATION_TIER="${ESCALATION_TIER:-0}"
+        MAX_RETRIES="${ELLA_WATCHDOG_MAX_RETRIES:-3}"
         EFFECTIVE_STALE_MIN="$STALE_MIN"
         case "$KIND" in
             crash_recovery|bigloop_followup) EFFECTIVE_STALE_MIN="$RECOVERY_STALE_MIN" ;;
@@ -352,10 +456,17 @@ except Exception:
                 # eigentlichen (Zwischen-)Auftrag, den das System gerade durchsetzt.
                 _notify_session "$SESSION" "🔁 [Automatischer Anstoß, Versuch ${NEW_COUNT}/${MAX_RETRIES}] $TASK"
                 _reinject_task "$SESSION" "$TASK"
+            elif [ "$ESCALATION_TIER" -lt 1 ] && [ -n "$SESSION" ] && [ "$SESSION" != "?" ]; then
+                _log "Max. Versuche (${MAX_RETRIES}) auf Stufe ${ESCALATION_TIER} erreicht — eskaliere auf Stufe $((ESCALATION_TIER + 1))."
+                if ! _escalate_to_summary "$SESSION" "$TASK"; then
+                    bot_python3 "$BASE_DIR/ella-task.py" fail "$ELLA_TASK_FILE" > /dev/null
+                    _log "Eskalation fehlgeschlagen (keine Zusammenfassung/Session-Reset moeglich) — gebe auf."
+                    _notify_session "$SESSION" "❌ Es war dem Bot nicht möglich, das Problem zu lösen: \"$TASK\". Bitte manuell prüfen."
+                fi
             else
                 bot_python3 "$BASE_DIR/ella-task.py" fail "$ELLA_TASK_FILE" > /dev/null
-                _log "Max. Versuche (${MAX_RETRIES}) erreicht — gebe auf, kein weiterer Auto-Retry."
-                _notify_session "$SESSION" "❌ Ich komme bei \"$TASK\" nach ${MAX_RETRIES} automatischen Versuchen nicht weiter. Bitte manuell prüfen."
+                _log "Max. Versuche (${MAX_RETRIES}) auf Eskalationsstufe ${ESCALATION_TIER} erreicht — gebe endgueltig auf."
+                _notify_session "$SESSION" "❌ Es war dem Bot nicht möglich, das Problem zu lösen: \"$TASK\". Bitte manuell prüfen."
             fi
             exit 0
         fi
