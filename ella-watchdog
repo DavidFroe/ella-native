@@ -145,10 +145,11 @@ _do_crash_recovery() {
 }
 
 # Lässt Gemma anhand der juengsten Nachrichten in der Session beurteilen, ob
-# eine Crash-Recovery-Aufgabe erledigt ist (DONE/NOT_DONE). Robuster als ein
-# reiner Lebenszeichen-Ping, da der Bot bei dieser automatisch reinjizierten
-# Aufgabe ggf. nicht selbst an "ella task done" denkt.
-_judge_crash_recovery_done() {
+# eine automatisch erstellte Aufgabe (Crash-Recovery ODER Bigloop-Nachhaken)
+# erledigt ist (DONE/NOT_DONE). Robuster als ein reiner Lebenszeichen-Ping,
+# da der Bot bei diesen automatisch reinjizierten Aufgaben ggf. nicht selbst
+# an "ella task done" denkt.
+_judge_task_done() {
     local session="$1" task="$2" tmp verdict
     tmp=$(bot_run "mktemp -p '$BOT_USER_HOME' .ella_judge_tail_XXXXXX" 2>/dev/null)
     [ -z "$tmp" ] && { echo "NOT_DONE"; return; }
@@ -250,7 +251,9 @@ except Exception:
         KIND=$(echo "$OUT" | grep '^KIND:' | cut -d: -f2-)
         MAX_RETRIES="${ELLA_WATCHDOG_MAX_RETRIES:-2}"
         EFFECTIVE_STALE_MIN="$STALE_MIN"
-        [ "$KIND" = "crash_recovery" ] && EFFECTIVE_STALE_MIN="$RECOVERY_STALE_MIN"
+        case "$KIND" in
+            crash_recovery|bigloop_followup) EFFECTIVE_STALE_MIN="$RECOVERY_STALE_MIN" ;;
+        esac
 
         if [ -z "$AGE" ] || [ "$AGE" -lt 0 ]; then
             _log "WARN — Task aktiv, aber kein Heartbeat-Zeitstempel lesbar"
@@ -263,15 +266,15 @@ except Exception:
             exit 0
         fi
 
-        if [ "$KIND" = "crash_recovery" ]; then
-            VERDICT=$(_judge_crash_recovery_done "$SESSION" "$TASK")
+        if [ "$KIND" = "crash_recovery" ] || [ "$KIND" = "bigloop_followup" ]; then
+            VERDICT=$(_judge_task_done "$SESSION" "$TASK")
             if [ "$VERDICT" = "DONE" ]; then
                 bot_python3 "$BASE_DIR/ella-task.py" done "$ELLA_TASK_FILE" > /dev/null
-                _log "Crash-Recovery-Aufgabe laut Gemma erledigt: $TASK"
-                echo -e "${GREEN}✅ Watchdog: Crash-Recovery-Aufgabe laut Gemma erledigt.${NC}"
+                _log "Automatische Aufgabe ($KIND) laut Gemma erledigt: $TASK"
+                echo -e "${GREEN}✅ Watchdog: Aufgabe laut Gemma erledigt.${NC}"
                 exit 0
             fi
-            _log "Crash-Recovery-Aufgabe laut Gemma noch nicht fertig (oder kein Urteil moeglich): $TASK"
+            _log "Automatische Aufgabe ($KIND) laut Gemma noch nicht fertig (oder kein Urteil moeglich): $TASK"
         fi
 
         echo -e "${YELLOW}⏱  Heartbeat seit ${AGE} Min. überfällig (Schwelle ${EFFECTIVE_STALE_MIN}m). Bestätige per Ping...${NC}"
