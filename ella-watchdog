@@ -284,6 +284,16 @@ try:
                 break
         except Exception:
             continue
+    # Sicherheitspuffer gegen eine Race Condition: wenn die letzte Nachricht
+    # erst innerhalb der letzten 90s geschrieben wurde, behandeln wir das
+    # IMMER als "arbeitet noch", egal was last_nudge_at sagt. Live erlebt:
+    # Klauski hat seine Abschlussmeldung geschrieben, der Snapshot-Vergleich
+    # hat das aber um Sekunden verpasst (last_nudge_at lag noch VOR der
+    # Nachricht, aber der Check lief, BEVOR sie vollstaendig geschrieben war)
+    # -- ein Neustart haette mitten in die gerade fertige Arbeit gekracht.
+    now_ms = time.time() * 1000
+    if last_ts_ms and (now_ms - last_ts_ms) < 90_000:
+        print('RECENT'); sys.exit(0)
     if not last_nudge_at:
         print('NEW' if last_ts_ms else 'UNKNOWN'); sys.exit(0)
     nudge_dt = datetime.datetime.fromisoformat(last_nudge_at)
@@ -431,6 +441,16 @@ except Exception:
         # Wenn ja, erst dann Gemma fragen, ob's jetzt erledigt ist.
         if [ "$KIND" = "crash_recovery" ] || [ "$KIND" = "bigloop_followup" ]; then
             CHANGED=$(_session_changed_since "$SESSION" "$LAST_NUDGE_AT")
+            if [ "$CHANGED" = "RECENT" ]; then
+                # Sicherheitspuffer: die letzte Nachricht ist juenger als 90s --
+                # der Bot war/ist offenkundig gerade aktiv. Kein Neustart, kein
+                # Reinject diesen Tick, einfach abwarten und naechstes Mal neu
+                # bewerten (sonst Risiko, mitten in eine soeben abgeschlossene
+                # Arbeit hineinzuplatzen -- live als Race Condition erlebt).
+                _log "Session $SESSION hat sich gerade erst (< 90s) geaendert -- gebe Bot Zeit, kein Neustart diesen Tick."
+                echo -e "${GREEN}✅ Watchdog: Session war gerade aktiv -- warte noch ab.${NC}"
+                exit 0
+            fi
             if [ "$CHANGED" = "SAME" ]; then
                 _log "Keine neue Aktivitaet seit letztem Anstoss in $SESSION -- Gemma-Abfrage uebersprungen."
                 echo -e "${YELLOW}⏱  Seit dem letzten Anstoß ist nichts Neues passiert — stoße direkt erneut an.${NC}"
