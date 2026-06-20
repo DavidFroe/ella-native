@@ -128,6 +128,14 @@ def _dbg(debug, msg):
         print(f"[bigloop-debug] {msg}", file=sys.stderr)
 
 
+def _info(msg):
+    """Kurze Zusammenfassung, die IMMER geschrieben wird (auch ohne --debug) --
+    Bigloop laeuft selten genug, dass jeder tatsaechliche Review-Versuch
+    sichtbar sein soll, nicht nur im manuellen Debug-Modus."""
+    ts = now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ts}] {msg}", file=sys.stderr)
+
+
 def main():
     force = "--force" in sys.argv[1:]
     debug = "--debug" in sys.argv[1:] or force
@@ -163,40 +171,50 @@ def main():
     idx = cfg.get("rotation_index", 0) % len(keys)
     session_key = keys[idx]
     cfg["rotation_index"] = (idx + 1) % len(keys)
-    cfg["last_run_at"] = now().isoformat()
-    save_config(cfg)
     _dbg(debug, f"gewaehlt (Rotation-Index {idx}): {session_key}")
 
-    session_id = session_id_for(session_key)
-    if not session_id:
-        _dbg(debug, "EXIT: keine sessionId fuer diesen Key gefunden")
-        return
-    text = read_session_text(session_id)
-    if not text or not text.strip():
-        _dbg(debug, "EXIT: Session-Transkript leer/nicht lesbar")
-        return
-    _dbg(debug, f"Transkript gelesen: {len(text)} Zeichen (sessionId={session_id})")
+    # WICHTIG: last_run_at wird bewusst erst NACH dem (blockierenden) Review
+    # gespeichert (im finally-Block unten), nicht schon hier vor dem Gemma-
+    # Aufruf. Die Inferenz kann je nach Backend-Last deutlich laenger dauern
+    # als das konfigurierte Intervall -- wuerde man den Zeitstempel schon
+    # beim Start setzen, koennte der naechste Timer-Tick faelschlich denken,
+    # das Intervall sei schon abgelaufen, und einen ZWEITEN, ueberlappenden
+    # Lauf starten (Rueckstau / Race auf rotation_index, genau das hat die
+    # Sprung-Werte beim Testen verursacht).
+    try:
+        session_id = session_id_for(session_key)
+        if not session_id:
+            _info(f"reviewed session={session_key} -> ABBRUCH (keine sessionId gefunden)")
+            return
+        text = read_session_text(session_id)
+        if not text or not text.strip():
+            _info(f"reviewed session={session_key} id={session_id} -> ABBRUCH (Transkript leer/nicht lesbar)")
+            return
+        _dbg(debug, f"Transkript gelesen: {len(text)} Zeichen (sessionId={session_id})")
 
-    model_id = cfg.get("model_id")
-    context_cap = cfg.get("context_cap_tokens")
-    _dbg(debug, f"sende an Reviewer-Modell '{model_id}' (Kontext-Cap {context_cap} Tok. ~{int(context_cap)*3} Zeichen)")
-    verdict = review_with_gemma(text, model_id, context_cap)
-    if not verdict:
-        _dbg(debug, "EXIT: Reviewer-Modell hat nicht/leer geantwortet")
-        return
-    _dbg(debug, f"Antwort vom Reviewer-Modell:\n{'-'*40}\n{verdict}\n{'-'*40}")
+        model_id = cfg.get("model_id")
+        context_cap = cfg.get("context_cap_tokens")
+        _dbg(debug, f"sende an Reviewer-Modell '{model_id}' (Kontext-Cap {context_cap} Tok. ~{int(context_cap)*3} Zeichen)")
+        verdict = review_with_gemma(text, model_id, context_cap)
+        if not verdict:
+            _info(f"reviewed session={session_key} id={session_id} model={model_id} -> FEHLER (keine/leere Antwort vom Reviewer-Modell)")
+            return
+        _dbg(debug, f"Antwort vom Reviewer-Modell:\n{'-'*40}\n{verdict}\n{'-'*40}")
 
-    lines = verdict.splitlines()
-    first = (lines[0].strip().upper() if lines else "")
-    if first != "FOLLOWUP":
-        _dbg(debug, f"ERGEBNIS: '{first}' -> kein Nachhaken noetig, Session wird so belassen")
-        return
+        lines = verdict.splitlines()
+        first = (lines[0].strip().upper() if lines else "")
+        if first != "FOLLOWUP":
+            _info(f"reviewed session={session_key} id={session_id} model={model_id} -> {first or 'OK'} (kein Nachhaken noetig)")
+            return
 
-    followup_prompt = "\n".join(lines[1:]).strip()
-    if not followup_prompt:
-        _dbg(debug, "EXIT: FOLLOWUP erkannt, aber kein Prompt-Text dahinter")
-        return
-    _dbg(debug, f"ERGEBNIS: FOLLOWUP -> setze Aufgabe mit Prompt:\n{followup_prompt}")
+        followup_prompt = "\n".join(lines[1:]).strip()
+        if not followup_prompt:
+            _info(f"reviewed session={session_key} id={session_id} model={model_id} -> FOLLOWUP erkannt, aber kein Prompt-Text dahinter -- ABBRUCH")
+            return
+        _info(f"reviewed session={session_key} id={session_id} model={model_id} -> FOLLOWUP: {followup_prompt.splitlines()[0][:100]}")
+    finally:
+        cfg["last_run_at"] = now().isoformat()
+        save_config(cfg)
 
     fd, prompt_file = tempfile.mkstemp(dir=BOT_USER_HOME, prefix=".ella_bigloop_prompt_")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
