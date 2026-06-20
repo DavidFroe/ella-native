@@ -97,10 +97,16 @@ _ping_agent() {
 # echte argv-Werte, gleiches Prinzip wie _notify_session.
 _reinject_task() {
     local session="$1" task="$2"
+    # WICHTIG: --timeout setzen! Ohne Timeout wartet dieser CLI-Aufruf
+    # UNBEGRENZT auf eine Antwort -- bei einer haengenden/ueberfuellten
+    # Session blieb so ein Wrapper-Prozess schon mal 30+ Minuten am Leben
+    # und fraSS Backend-Kapazitaet, obwohl die zugehoerige Aufgabe laengst
+    # als gescheitert markiert war. 660s liegt knapp ueber dem von OpenClaw
+    # selbst beobachteten internen Lane-Timeout (630000ms).
     if [ "$BOT_USER" = "$(whoami)" ]; then
-        nohup bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw agent --agent main --session-key "$1" --message "$2" --deliver' _ "$session" "$task" >> "$ELLA_WATCHDOG_LOG" 2>&1 &
+        nohup bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw agent --agent main --session-key "$1" --message "$2" --deliver --timeout 660' _ "$session" "$task" >> "$ELLA_WATCHDOG_LOG" 2>&1 &
     else
-        sudo -u "$BOT_USER" bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw agent --agent main --session-key "$1" --message "$2" --deliver' _ "$session" "$task" >> "$ELLA_WATCHDOG_LOG" 2>&1 &
+        sudo -u "$BOT_USER" bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw agent --agent main --session-key "$1" --message "$2" --deliver --timeout 660' _ "$session" "$task" >> "$ELLA_WATCHDOG_LOG" 2>&1 &
     fi
     disown 2>/dev/null
 }
