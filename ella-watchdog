@@ -473,6 +473,12 @@ Description=Ella Watchdog Check
 Type=oneshot
 Environment=HOME=$BOT_USER_HOME
 ExecStart=/bin/bash -lc \"source $BOT_USER_HOME/.nvm/nvm.sh 2>/dev/null; $BASE_DIR/ella-watchdog check\"
+# WICHTIG: Default ist KillMode=control-group -- damit wuerde systemd nach
+# Skriptende die GESAMTE Prozessgruppe killen, auch im Hintergrund
+# gestartete Reinject-/Notify-Aufrufe (nohup/disown schuetzen davor NICHT,
+# das wirkt nur gegen Signale vom Terminal, nicht gegen Cgroup-Kills).
+# KillMode=process killt nur den direkt gestarteten Bash-Prozess.
+KillMode=process
 "
         TIMER_CONTENT="[Unit]
 Description=Ella Watchdog Timer (Tick alle 60s, eigentliches Intervall via 'ella watchdog interval')
