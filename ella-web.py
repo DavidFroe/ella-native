@@ -372,10 +372,14 @@ def rag_query(project, question):
     sichtbarer Reasoning-Chain, bei echten/laengeren Dokumenten dauert eine
     Antwort durchaus 1-2 Minuten."""
     body = json.dumps({"project": project, "question": question}).encode()
+    admin_secret = read_rag_conf_value("CLAWRAG_ADMIN_SECRET")
+    headers = {"Content-Type": "application/json"}
+    if admin_secret:
+        headers["X-Admin-Secret"] = admin_secret
     req = urllib.request.Request(
         f"{CLAWRAG_URL}/query",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     resp = urllib.request.urlopen(req, timeout=180)
