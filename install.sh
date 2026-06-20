@@ -49,9 +49,75 @@ sudo ln -sf "$BASE_DIR/ella" /usr/local/bin/ella
 echo -e "   ${GREEN}✅ 'ella' ist jetzt überall verfügbar.${NC}"
 
 # ---------------------------------------------------------------
-# 4. OPENCLAW CONFIG
+# 4. OWLTRAIL KONFIGURIEREN + STARTEN
 # ---------------------------------------------------------------
-echo -e "\n${CYAN}⚙️  4. OpenClaw Konfiguration...${NC}"
+# Bewusst VOR der OpenClaw-Installation: owltrail ist die Bruecke zum
+# LLM-Backend (QuiteQue) und braucht weder Node noch openclaw. Laeuft es
+# schon, koennen etwaige Verbindungstests waehrend der OpenClaw-Installation
+# bzw. des ersten Bot-Starts direkt erfolgreich sein, statt "network
+# connection error" zu liefern, weil owltrail noch gar nicht lief.
+echo -e "\n${CYAN}🦉 4. owltrail Konfiguration + Start...${NC}"
+OWLTRAIL_CONF="$BASE_DIR/owltrail.conf"
+
+if [ -f "$OWLTRAIL_CONF" ]; then
+    echo -e "   ${YELLOW}⚠️  Bestehende owltrail.conf gefunden.${NC}"
+    echo -n "   Beibehalten? [J/n]: "
+    read -r KEEP_OWL
+    if [[ "$KEEP_OWL" =~ ^[nN]$ ]]; then
+        rm -f "$OWLTRAIL_CONF"
+    fi
+fi
+
+if [ ! -f "$OWLTRAIL_CONF" ]; then
+    echo -e "\n   ${BOLD}🔧 owltrail Verbindung konfigurieren:${NC}"
+
+    echo -n "   QuiteQue Server-IP   [192.168.188.20]: "
+    read -r OWL_SRV_IP
+    OWL_SRV_IP="${OWL_SRV_IP:-192.168.188.20}"
+
+    echo -n "   QuiteQue Port        [7077]: "
+    read -r OWL_QQ_PORT
+    OWL_QQ_PORT="${OWL_QQ_PORT:-7077}"
+
+    echo -n "   owltrail Listen-Port [8081]: "
+    read -r OWL_PORT
+    OWL_PORT="${OWL_PORT:-8081}"
+
+    echo -n "   Benutzername (für QuiteQue-Priorisierung) [ella]: "
+    read -r OWL_USER
+    OWL_USER="${OWL_USER:-ella}"
+
+    cat > "$OWLTRAIL_CONF" << EOWL
+{
+  "server_ip": "${OWL_SRV_IP}",
+  "quiteque_port": ${OWL_QQ_PORT},
+  "listen_port": ${OWL_PORT},
+  "username": "${OWL_USER}",
+  "model_id": "auto",
+  "timeout": 1800
+}
+EOWL
+    echo -e "   ${GREEN}✅ owltrail.conf erstellt.${NC}"
+else
+    OWL_PORT=$(python3 -c "import json; print(json.load(open('$OWLTRAIL_CONF')).get('listen_port', 8081))" 2>/dev/null || echo 8081)
+fi
+
+# ella.conf braucht den Port schon jetzt (ella-core liest ihn beim Start)
+if [ ! -f "$BASE_DIR/ella.conf" ]; then
+    echo "OWLTRAIL_PORT=${OWL_PORT}" > "$BASE_DIR/ella.conf"
+fi
+
+echo -e "   ${CYAN}Starte owltrail...${NC}"
+if bash "$BASE_DIR/ella-owltrail" start; then
+    bash "$BASE_DIR/ella-owltrail" test 2>&1 | tail -5 || true
+else
+    echo -e "   ${YELLOW}⚠️  owltrail-Start fehlgeschlagen — spaeter manuell mit 'ella owltrail start'.${NC}"
+fi
+
+# ---------------------------------------------------------------
+# 5. OPENCLAW CONFIG
+# ---------------------------------------------------------------
+echo -e "\n${CYAN}⚙️  5. OpenClaw Konfiguration...${NC}"
 
 KIBOT_CONFIG="$HOME/.config/openclaw-kibot/.openclaw/openclaw.json"
 GW_CONFIG="$HOME/.openclaw/openclaw.json"
@@ -75,17 +141,7 @@ if [ "$CONFIG_EXISTS" = true ]; then
 fi
 
 if [ "$CONFIG_EXISTS" = false ]; then
-    echo -e "\n   ${BOLD}🔧 Neue Konfiguration erstellen:${NC}"
-
-    # owlAPI URL
-    echo -n "   owlAPI URL [http://localhost:4040]: "
-    read -r OWLAPI_URL
-    OWLAPI_URL="${OWLAPI_URL:-http://localhost:4040}"
-
-    # owltrail Port
-    echo -n "   owltrail Port [8081]: "
-    read -r OWL_PORT
-    OWL_PORT="${OWL_PORT:-8081}"
+    echo -e "\n   ${BOLD}🔧 Neue Konfiguration erstellen (owltrail-Port ${OWL_PORT} wird übernommen):${NC}"
 
     # Gateway Port
     echo -n "   Gateway Port [18789]: "
@@ -178,9 +234,9 @@ EOJSON
 fi
 
 # ---------------------------------------------------------------
-# 5. NODE.JS >= 22 SICHERSTELLEN (openclaw-Voraussetzung)
+# 6. NODE.JS >= 22 SICHERSTELLEN (openclaw-Voraussetzung)
 # ---------------------------------------------------------------
-echo -e "\n${CYAN}⬡  5. Node.js prüfen...${NC}"
+echo -e "\n${CYAN}⬡  6. Node.js prüfen...${NC}"
 NODE_OK=false
 if command -v node &>/dev/null; then
     NODE_MAJOR=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
@@ -203,9 +259,9 @@ if [ "$NODE_OK" = false ]; then
 fi
 
 # ---------------------------------------------------------------
-# 6. OPENCLAW INSTALLIEREN (falls fehlt)
+# 7. OPENCLAW INSTALLIEREN (falls fehlt)
 # ---------------------------------------------------------------
-echo -e "\n${CYAN}🐾 6. OpenClaw prüfen...${NC}"
+echo -e "\n${CYAN}🐾 7. OpenClaw prüfen...${NC}"
 if command -v openclaw &>/dev/null; then
     OC_VER=$(openclaw --version 2>/dev/null | head -1)
     echo -e "   ${GREEN}✅ openclaw vorhanden: ${OC_VER}${NC}"
@@ -236,7 +292,7 @@ else
 fi
 
 # Gateway-Service einrichten (einmalig nötig)
-echo -e "\n${CYAN}🛰️  6b. OpenClaw Gateway einrichten...${NC}"
+echo -e "\n${CYAN}🛰️  7b. OpenClaw Gateway einrichten...${NC}"
 if command -v openclaw &>/dev/null; then
     GW_STATUS=$(openclaw gateway status 2>&1 || true)
     if echo "$GW_STATUS" | grep -qi "disabled\|not installed\|not found\|install"; then
@@ -251,74 +307,9 @@ else
 fi
 
 # ---------------------------------------------------------------
-# 7. OWLTRAIL KONFIGURIEREN
+# 8. STATUS-WEBSEITE, TOKEN-KONTINGENT & WATCHDOG
 # ---------------------------------------------------------------
-echo -e "\n${CYAN}🦉 7. owltrail Konfiguration...${NC}"
-OWLTRAIL_CONF="$BASE_DIR/owltrail.conf"
-
-if [ -f "$OWLTRAIL_CONF" ]; then
-    echo -e "   ${YELLOW}⚠️  Bestehende owltrail.conf gefunden.${NC}"
-    echo -n "   Beibehalten? [J/n]: "
-    read -r KEEP_OWL
-    if [[ "$KEEP_OWL" =~ ^[nN]$ ]]; then
-        rm -f "$OWLTRAIL_CONF"
-    fi
-fi
-
-if [ ! -f "$OWLTRAIL_CONF" ]; then
-    echo -e "\n   ${BOLD}🔧 owltrail Verbindung konfigurieren:${NC}"
-
-    echo -n "   QuiteQue Server-IP   [192.168.188.20]: "
-    read -r OWL_SRV_IP
-    OWL_SRV_IP="${OWL_SRV_IP:-192.168.188.20}"
-
-    echo -n "   QuiteQue Port        [7077]: "
-    read -r OWL_QQ_PORT
-    OWL_QQ_PORT="${OWL_QQ_PORT:-7077}"
-
-    echo -n "   owltrail Listen-Port [${OWL_PORT:-8081}]: "
-    read -r OWL_LISTEN
-    OWL_LISTEN="${OWL_LISTEN:-${OWL_PORT:-8081}}"
-
-    echo -n "   Benutzername (für QuiteQue-Priorisierung) [ella]: "
-    read -r OWL_USER
-    OWL_USER="${OWL_USER:-ella}"
-
-    cat > "$OWLTRAIL_CONF" << EOWL
-{
-  "server_ip": "${OWL_SRV_IP}",
-  "quiteque_port": ${OWL_QQ_PORT},
-  "listen_port": ${OWL_LISTEN},
-  "username": "${OWL_USER}",
-  "model_id": "auto",
-  "timeout": 1800
-}
-EOWL
-
-    # openclaw-Configs ebenfalls auf den gewählten Port anpassen
-    OWL_PORT="$OWL_LISTEN"
-
-    echo -e "   ${GREEN}✅ owltrail.conf erstellt.${NC}"
-fi
-
-# owltrail Bibliothek prüfen
-if [ -f "$BASE_DIR/owltrail.py" ]; then
-    echo -e "   ${GREEN}✅ owltrail.py (Bibliothek) vorhanden.${NC}"
-else
-    echo -e "   ${RED}❌ owltrail.py fehlt in $BASE_DIR — bitte Repository neu klonen.${NC}"
-fi
-
-# ---------------------------------------------------------------
-# 8. ELLA.CONF
-# ---------------------------------------------------------------
-if [ ! -f "$BASE_DIR/ella.conf" ]; then
-    echo "OWLTRAIL_PORT=${OWL_PORT:-8081}" > "$BASE_DIR/ella.conf"
-fi
-
-# ---------------------------------------------------------------
-# 9. STATUS-WEBSEITE, TOKEN-KONTINGENT & WATCHDOG
-# ---------------------------------------------------------------
-echo -e "\n${CYAN}🌐 9. Status-Webseite, Token-Kontingent & Watchdog...${NC}"
+echo -e "\n${CYAN}🌐 8. Status-Webseite, Token-Kontingent & Watchdog...${NC}"
 
 # Asset-Ordner fuer Portraits/Playlist anlegen (leer, fuellt sich bei Bedarf)
 mkdir -p "$HOME/.ella_web_assets/klauski_states" "$HOME/.ella_web_assets/playlist"
@@ -350,8 +341,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${GREEN}${BOLD}✅ ELLA-PI Installation abgeschlossen!${NC}"
 echo ""
 echo -e "Nächste Schritte:"
-echo -e "  ${CYAN}ella owltrail start${NC}  owltrail Proxy starten"
-echo -e "  ${CYAN}ella owltrail test${NC}   Verbindung zu QuiteQue testen"
+echo -e "  ${CYAN}ella owltrail test${NC}   Verbindung zu QuiteQue erneut testen (owltrail läuft bereits)"
 echo -e "  ${CYAN}ella start${NC}           Ella-Pi starten"
 echo -e "  ${CYAN}ella status${NC}          Status prüfen"
 echo -e "  ${CYAN}ella help${NC}            Alle Befehle"
