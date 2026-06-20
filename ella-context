@@ -6,7 +6,7 @@ VAL="$1"
 # --- SHOW: Aktuelle Kontext-Größe anzeigen ---
 if [ -z "$VAL" ] || [ "$VAL" = "show" ]; then
     echo -e "${BLUE}🧠 Aktueller Kontext:${NC}"
-    python3 -c "
+    bot_python3 -c "
 import json, os
 
 GREY = '\033[90m'; CYAN = '\033[36m'; R = '\033[0m'; BOLD = '\033[1m'
@@ -34,11 +34,16 @@ for p in ['$OPENCLAW_CONFIG_PATH', os.path.expanduser('~/.openclaw/openclaw.json
         shown = False
         for pname, prov in providers.items():
             for m in prov.get('models', []):
+                cw = m.get('contextWindow', 0)
                 mt = m.get('maxTokens', 0)
-                if not mt: continue
-                h = fmt(mt)
-                print(f'  OpenClaw:  {BOLD}{h}{R} ({mt:,} Tokens)')
-                if ctx_min and mt < ctx_min:
+                if not cw and not mt: continue
+                label = f'{pname}/{m.get(\"id\",\"?\")}'
+                cw_s = fmt(cw) if cw else 'default(200K)'
+                mt_s = fmt(mt) if mt else '?'
+                print(f'  {label}: Kontext={BOLD}{cw_s}{R}  Output-Cap={mt_s}')
+                if not cw:
+                    print(f'  {GREY}⚠ contextWindow nicht gesetzt — OpenClaw nutzt Default (200K){R}')
+                if ctx_min and cw and cw < ctx_min:
                     print(f'  {GREY}⚠ unter owltrail context_min ({fmt(ctx_min)}){R}')
                 shown = True
         primary = d.get('agents',{}).get('defaults',{}).get('model',{}).get('primary','')
@@ -54,7 +59,7 @@ fi
 
 # --- MAX: Maximalen Kontext setzen (owltrail max_tokens) ---
 if [ "$VAL" = "max" ]; then
-    CTX=$(python3 -c "
+    CTX=$(bot_python3 -c "
 import json
 p = '$OWLTRAIL_DIR/config.json'
 try:
@@ -105,7 +110,12 @@ else
 fi
 
 # Update BEIDE OpenClaw Configs
-python3 -c "
+# contextWindow = Größe des Kontextfensters (steuert Session-Kompaktierung).
+# maxTokens     = Output-Cap pro Antwort, bleibt auf einem festen, sinnvollen Wert
+#                 (NICHT mit der Kontextgröße verwechseln — sonst darf das Modell
+#                 bis zu $CTX Tokens pro Antwort generieren, was Timeouts verursacht).
+OUTPUT_CAP=8192
+bot_python3 -c "
 import json, sys, os
 configs = ['$OPENCLAW_CONFIG_PATH', os.path.expanduser('~/.openclaw/openclaw.json')]
 updated = 0
@@ -115,7 +125,8 @@ for p in configs:
         providers = d.get('models', {}).get('providers', {})
         for provider in providers.values():
             for model in provider.get('models', []):
-                model['maxTokens'] = $CTX
+                model['contextWindow'] = $CTX
+                model['maxTokens'] = $OUTPUT_CAP
         with open(p, 'w') as f: json.dump(d, f, indent=4)
         updated += 1
     except Exception as e:

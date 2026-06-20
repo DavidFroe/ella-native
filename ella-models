@@ -8,15 +8,9 @@ if command -v require_container >/dev/null 2>&1; then
     require_container
 fi
 
-# Helper: Run openclaw command (inside or outside container)
+# Helper: Run openclaw command as BOT_USER
 oc_run() {
-    if command -v is_inside >/dev/null 2>&1 && is_inside; then
-        eval "$@"
-    elif command -v podman >/dev/null 2>&1; then
-        podman exec --user david "$CONTAINER_NAME" bash -lc "$*"
-    else
-        eval "$@"
-    fi
+    bot_run "$*"
 }
 
 # owlAPI-Modelle von localhost:4040
@@ -181,20 +175,18 @@ set_model() {
         echo -e "${BLUE}🦉 Konfiguriere Ella für owlAPI (Triage: $OWL_MODEL_ID)${NC}"
         echo -e "   Route: Ella → owltrail (:8081) → owlAPI (:4040) → Backend"
         
-        # Provider in openclaw.json eintragen 
-        RESULT=$(python3 -c "
+        # Provider in openclaw.json eintragen (als BOT_USER)
+        RESULT=$(sudo -u "$BOT_USER" python3 -c "
 import json, os
-conf = os.environ.get('OPENCLAW_JSON_PATH', os.path.expanduser('~/.openclaw/openclaw.json'))
+conf = '$OPENCLAW_JSON_PATH'
 try:
     with open(conf) as f: data = json.load(f)
 except Exception:
     data = {}
 
-# Ensure models structure exists
 if 'models' not in data: data['models'] = {}
 if 'providers' not in data['models']: data['models']['providers'] = {}
 
-# Add our custom provider
 data['models']['providers']['custom-localhost-8081'] = {
     'baseUrl': 'http://localhost:8081/v1',
     'models': [{'id': '$OWL_MODEL_ID', 'name': '$OWL_MODEL_ID'}]

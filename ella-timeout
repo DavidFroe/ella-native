@@ -6,22 +6,25 @@ VAL="$1"
 
 # --- SHOW: Aktuelles Timeout anzeigen ---
 if [ -z "$VAL" ] || [ "$VAL" = "show" ]; then
-    echo -e "${BLUE}⏱️  Aktuelles Timeout (LLM Proxies):${NC}"
+    echo -e "${BLUE}⏱️  Aktuelles Timeout:${NC}"
     python3 -c "
-import json, os
-
-qq_path = os.path.expanduser('~/apps/QuiteQue/config.json')
-ot_path = os.path.expanduser('~/apps/owltrail/config.json')
-
+import json
 try:
-    with open(qq_path) as f: d = json.load(f)
-    print(f'  QuiteQue Middleware : {d.get(\"timeout_seconds\", 120)} Sekunden')
-except: pass
-
+    with open('$OWLTRAIL_CONF') as f: d = json.load(f)
+    print(f'  owltrail Proxy (HTTP)        : {d.get(\"timeout\", 1800)} Sekunden')
+except Exception as e:
+    print(f'  ⚠ konnte $OWLTRAIL_CONF nicht lesen: {e}')
+"
+    bot_python3 -c "
+import json
 try:
-    with open(ot_path) as f: d = json.load(f)
-    print(f'  owltrail Proxy      : {d.get(\"timeout_seconds\", 180)} Sekunden')
-except: pass
+    with open('$OPENCLAW_CONFIG_PATH') as f: d = json.load(f)
+    abort_ms = d.get('diagnostics', {}).get('stuckSessionAbortMs')
+    warn_ms = d.get('diagnostics', {}).get('stuckSessionWarnMs')
+    print(f'  OpenClaw Stuck-Session-Abort : {(abort_ms or 360000)//1000} Sekunden' + ('' if abort_ms else ' (Default)'))
+    print(f'  OpenClaw Stuck-Session-Warn  : {(warn_ms or 120000)//1000} Sekunden' + ('' if warn_ms else ' (Default)'))
+except Exception as e:
+    print(f'  ⚠ konnte openclaw.json nicht lesen: {e}')
 "
     exit 0
 fi
@@ -47,26 +50,31 @@ fi
 
 echo -e "${BLUE}⚙️ Setze Timeout für LLM Anfragen auf ${TIMEOUT_SEC} Sekunden...${NC}"
 
-# Update configs
 python3 -c "
-import json, os
+import json
 TIMEOUT = int($TIMEOUT_SEC)
-qq_path = os.path.expanduser('~/apps/QuiteQue/config.json')
-ot_path = os.path.expanduser('~/apps/owltrail/config.json')
-
-updated = 0
-for p in [qq_path, ot_path]:
-    try:
-        if not os.path.exists(p): continue
-        with open(p, 'r') as f: d = json.load(f)
-        d['timeout_seconds'] = TIMEOUT
-        with open(p, 'w') as f: json.dump(d, f, indent=4)
-        updated += 1
-    except: pass
+p = '$OWLTRAIL_CONF'
+with open(p, 'r') as f: d = json.load(f)
+d['timeout'] = TIMEOUT
+with open(p, 'w') as f: json.dump(d, f, indent=2)
+print(f'✅ owltrail.conf aktualisiert (timeout={TIMEOUT}).')
 "
 
-echo -e "${YELLOW}🔄 Starte Middleware und Proxies neu...${NC}"
-sudo systemctl restart openclaw-gateway 2>/dev/null || true
-$BASE_DIR/ella qq restart 2>/dev/null || true
-$BASE_DIR/ella owltrail restart 2>/dev/null || true
+# OpenClaw bricht lange Model-Calls selbst ab (diagnostics.stuckSessionAbortMs,
+# Default 360s) — unabhängig vom owltrail-HTTP-Timeout oben. Beide synchron halten,
+# sonst killt OpenClaw die Anfrage, bevor owltrail je timeout.
+bot_python3 -c "
+import json
+TIMEOUT_MS = int($TIMEOUT_SEC) * 1000
+p = '$OPENCLAW_CONFIG_PATH'
+with open(p, 'r') as f: d = json.load(f)
+diag = d.setdefault('diagnostics', {})
+diag['stuckSessionAbortMs'] = TIMEOUT_MS
+diag['stuckSessionWarnMs'] = max(60000, TIMEOUT_MS // 3)
+with open(p, 'w') as f: json.dump(d, f, indent=4)
+print(f'✅ openclaw.json aktualisiert (stuckSessionAbortMs={TIMEOUT_MS}).')
+"
+
+echo -e "${YELLOW}🔄 Starte Gateway und owltrail neu...${NC}"
+$BASE_DIR/ella --restart
 echo -e "${GREEN}✅ Timeout erfolgreich angewendet!${NC}"

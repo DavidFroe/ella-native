@@ -1,39 +1,101 @@
+#!/usr/bin/env bash
+# ================================================================
+# ELLA TASK — Aufgabenspeicher für Selbstdokumentation des Bots
+#
+# Genau EIN Master-Task. Der Bot ruft das selbst auf, wenn er eine
+# schwere Aufgabe beginnt/bearbeitet/beendet. ella-watchdog liest
+# diese Datei, um hängende Aufgaben zu erkennen.
+# ================================================================
 BASE_DIR=$(dirname "$(readlink -f "$0")")
-source $BASE_DIR/ella-core
+source "$BASE_DIR/ella-core"
 
-VPS_USER="root"
-VPS_IP="10.0.0.1"
-SSH_KEY="$HOME/.ssh/ella_id"
-REMOTE_TASK_FILE="~/ella-task.json"
-LOCAL_TASK_FILE="/tmp/ella-task.json"
+SUB="${1:-show}"
+shift 2>/dev/null
 
-echo -e "${CYAN}📡 ELLA REMOTE SYNC (VPS: $VPS_IP)...${NC}"
+case "$SUB" in
+    set)
+        DESC="$1"
+        SESSION="${2:-}"
+        if [ -z "$DESC" ]; then
+            echo -e "${RED}Usage: ella task set \"<Beschreibung>\" [session_key]${NC}"
+            exit 1
+        fi
+        if [ -z "$SESSION" ]; then
+            # Kein session_key übergeben — automatisch die zuletzt aktive Session
+            # ermitteln (das ist quasi immer die Session, aus der dieser Aufruf
+            # gerade kommt, da deren Lane währenddessen blockiert ist).
+            SESSION=$(bot_run "$OPENCLAW_BIN sessions --json --limit 3" 2>/dev/null | \
+                python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    for s in d.get('sessions', []):
+        if s.get('key') != 'agent:main:watchdog-ping':
+            print(s['key'])
+            break
+except Exception:
+    pass
+" 2>/dev/null)
+        fi
+        bot_python3 "$BASE_DIR/ella-task.py" set "$ELLA_TASK_FILE" "$DESC" "$SESSION" > /dev/null
+        echo -e "${GREEN}✅ Aufgabe gesetzt:${NC} $DESC"
+        [ -n "$SESSION" ] && echo -e "  ${GREY}Session: $SESSION${NC}"
+        ;;
 
-# 1. PRÜFUNG: Gibt es Tasks?
-if ssh -i "$SSH_KEY" -o ConnectTimeout=3 -q "$VPS_USER@$VPS_IP" "[ -f $REMOTE_TASK_FILE ]"; then
-    echo -e "📥 Neuer Task gefunden. Lade herunter..."
-    
-    # 2. DOWNLOAD
-    scp -i "$SSH_KEY" -q "$VPS_USER@$VPS_IP:$REMOTE_TASK_FILE" "$LOCAL_TASK_FILE"
-    
-    # 3. PARSING (Wir nehmen python3, da jq oft fehlt)
-    # Wir suchen den Key "prompt"
-    PROMPT=$(python3 -c "import json, sys; print(json.load(open('$LOCAL_TASK_FILE'))['prompt'])" 2>/dev/null)
-    
-    if [ -n "$PROMPT" ]; then
-        echo -e "📝 Aufgabe: ${YELLOW}\"$PROMPT\"${NC}"
-        
-        # 4. AUSFÜHRUNG
-        # Wir nutzen ella-ask, das den Agenten triggert
-        ~/.local/bin/ella-ask "$PROMPT"
-        
-        # 5. CLEANUP (Remote löschen, damit er nicht nochmal läuft)
-        ssh -i "$SSH_KEY" -q "$VPS_USER@$VPS_IP" "rm $REMOTE_TASK_FILE"
-        echo -e "✅ Task erledigt und gelöscht."
-    else
-        echo -e "${RED}❌ Fehler: Konnte 'prompt' nicht aus JSON lesen.${NC}"
-        cat "$LOCAL_TASK_FILE"
-    fi
-else
-    echo -e "💤 Kein neuer Task vorhanden."
-fi
+    heartbeat|hb)
+        RES=$(bot_python3 "$BASE_DIR/ella-task.py" heartbeat "$ELLA_TASK_FILE")
+        if [ "$RES" = "OK" ]; then
+            echo -e "${GREEN}💓 Heartbeat aktualisiert.${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Kein aktiver Auftrag — Heartbeat ignoriert.${NC}"
+        fi
+        ;;
+
+    done)
+        bot_python3 "$BASE_DIR/ella-task.py" done "$ELLA_TASK_FILE" > /dev/null
+        echo -e "${GREEN}✅ Aufgabe als erledigt markiert.${NC}"
+        ;;
+
+    clear)
+        bot_python3 "$BASE_DIR/ella-task.py" clear "$ELLA_TASK_FILE" > /dev/null
+        echo -e "${GREEN}🗑️  Aufgabenspeicher geleert.${NC}"
+        ;;
+
+    show|"")
+        echo -e "${BLUE}${BOLD}📋 Aktueller Master-Task${NC}"
+        OUT=$(bot_python3 "$BASE_DIR/ella-task.py" show "$ELLA_TASK_FILE")
+        STATUS=$(echo "$OUT" | grep '^STATUS:' | cut -d: -f2-)
+        if [ "$STATUS" != "in_progress" ]; then
+            case "$STATUS" in
+                done)   echo -e "  ${GREEN}Letzte Aufgabe erledigt.${NC}" ;;
+                failed) echo -e "  ${RED}Letzte Aufgabe nach mehreren automatischen Versuchen aufgegeben.${NC}" ;;
+                *)      echo -e "  ${GREY}Kein aktiver Auftrag.${NC}" ;;
+            esac
+        else
+            TASK=$(echo "$OUT" | grep '^TASK:' | cut -d: -f2-)
+            SESSION=$(echo "$OUT" | grep '^SESSION:' | cut -d: -f2-)
+            STARTED=$(echo "$OUT" | grep '^STARTED:' | cut -d: -f2-)
+            AGE=$(echo "$OUT" | grep '^HEARTBEAT_AGE_MIN:' | cut -d: -f2-)
+            echo -e "  ${BOLD}Aufgabe:${NC}    $TASK"
+            echo -e "  ${BOLD}Session:${NC}    ${GREY}$SESSION${NC}"
+            echo -e "  ${BOLD}Gestartet:${NC}  ${GREY}$STARTED${NC}"
+            echo -e "  ${BOLD}Heartbeat:${NC}  vor ${AGE} Min."
+        fi
+        ;;
+
+    --help|-h)
+        echo -e "${BLUE}${BOLD}📋 ELLA TASK — Aufgabenspeicher${NC}"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${GREEN}ella task set \"<text>\" [session_key]${NC}  Master-Task setzen"
+        echo -e "  ${GREEN}ella task heartbeat${NC}                  Lebenszeichen senden (während Bearbeitung)"
+        echo -e "  ${GREEN}ella task done${NC}                       Aufgabe als erledigt markieren"
+        echo -e "  ${GREEN}ella task show${NC}                       Aktuellen Task anzeigen"
+        echo -e "  ${GREEN}ella task clear${NC}                      Aufgabenspeicher leeren"
+        ;;
+
+    *)
+        echo -e "${RED}❌ Unbekannter task-Befehl: $SUB${NC}"
+        echo -e "   ella task --help"
+        exit 1
+        ;;
+esac

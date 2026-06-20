@@ -89,6 +89,8 @@ def main() -> None:
                    help="Pfad zur Log-Datei")
     p.add_argument("--pid",  default=os.path.expanduser("~/.ella_owltrail.pid"),
                    help="Pfad zur PID-Datei")
+    p.add_argument("--tokens-log", default=os.path.expanduser("~/.ella_tokens.jsonl"),
+                   help="Pfad zur Token-Usage-Logdatei (JSONL)")
     args = p.parse_args()
 
     owltrail.setup_logging(args.log, verbose=False)
@@ -106,7 +108,7 @@ def main() -> None:
     with open(args.pid, "w") as f:
         f.write(f"{os.getpid()}\n{port}\n")
 
-    proxy = owltrail.OwlTrailProxy(conf_file=args.conf)
+    proxy = owltrail.OwlTrailProxy(conf_file=args.conf, tokens_log_path=args.tokens_log)
     proxy.start(port=port)
 
     log.info(

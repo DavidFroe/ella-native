@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
-# Wrapper: führt openclaw als klauski-User aus (für david/root ohne nvm)
-exec sudo -u klauski bash -c 'source /home/klauski/.nvm/nvm.sh 2>/dev/null && openclaw "$@"' -- "$@"
+# Wrapper: führt openclaw als BOT_USER aus (wenn openclaw nicht im PATH)
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+[ -f "$BASE_DIR/ella.conf" ] && source "$BASE_DIR/ella.conf"
+BOT_USER="${BOT_USER:-klauski}"
+exec sudo -u "$BOT_USER" bash -c 'source /home/'"$BOT_USER"'/.nvm/nvm.sh 2>/dev/null && openclaw "$@"' -- "$@"

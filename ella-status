@@ -7,7 +7,7 @@ echo -e "${GREY}------------------------------------------------------------${NC
 
 # 1. PROCESS STATUS
 echo -e "${MAGENTA}🌀 ACTIVE PROCESSES:${NC}"
-GW_PID=$(pgrep -f "openclaw gateway|openclaw-gateway" | head -1)
+GW_PID=$(pgrep -f "openclaw/dist/index.js gateway" | head -1)
 [ -n "$GW_PID" ] && echo -e "  🛰️  Gateway:    ${GREEN}RUNNING (PID $GW_PID)${NC}" || echo -e "  🛰️  Gateway:    ${RED}OFFLINE${NC}"
 
 OWL_PID=$(pgrep -f "owltrail_server" | head -1)
@@ -39,7 +39,7 @@ echo -e "  💾 RAM:         ${YELLOW}$RAM_INFO${NC}"
 
 # 3. OPENCLAW STATUS
 echo -e "\n${MAGENTA}🧠 AGENT PROFILE:${NC}"
-OC_STATUS=$(timeout 15 $OPENCLAW_BIN status --all 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g')
+OC_STATUS=$(timeout 25 $OPENCLAW_BIN status --all 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g')
 if [ -n "$OC_STATUS" ]; then
     OC_VERSION=$(echo "$OC_STATUS" | grep -E '│\s+Version\s+│' | awk -F '│' '{print $3}' | xargs)
     OC_AGENTS=$(echo "$OC_STATUS" | grep -E '│\s+Agents\s+│' | awk -F '│' '{print $3}' | xargs)

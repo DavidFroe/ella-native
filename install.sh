@@ -316,6 +316,33 @@ if [ ! -f "$BASE_DIR/ella.conf" ]; then
 fi
 
 # ---------------------------------------------------------------
+# 9. STATUS-WEBSEITE, TOKEN-KONTINGENT & WATCHDOG
+# ---------------------------------------------------------------
+echo -e "\n${CYAN}🌐 9. Status-Webseite, Token-Kontingent & Watchdog...${NC}"
+
+# Asset-Ordner fuer Portraits/Playlist anlegen (leer, fuellt sich bei Bedarf)
+mkdir -p "$HOME/.ella_web_assets/klauski_states" "$HOME/.ella_web_assets/playlist"
+
+# Token-Kontingent initialisieren (Kostenkontrolle fuer Output-Token des Bots,
+# siehe "ella owltrail budget show/set/add")
+if [ ! -f "$HOME/.ella_token_budget.json" ]; then
+    echo '{"remaining": 56000, "total_consumed": 0}' > "$HOME/.ella_token_budget.json"
+    echo -e "   ${GREEN}✅ Token-Kontingent mit 56.000 Token initialisiert.${NC}"
+fi
+
+echo -n "   Status-Webseite (Port 8088, zeigt Status/Skills/Sessions/Token-Kontingent) als Autostart-Service einrichten? [J/n]: "
+read -r INSTALL_WEB
+if [[ ! "$INSTALL_WEB" =~ ^[nN]$ ]]; then
+    bash "$BASE_DIR/ella-web" install
+fi
+
+echo -n "   Watchdog (erkennt hängende Aufgaben + Kontext-Überlauf, prüft alle 5 Min.) als Timer einrichten? [J/n]: "
+read -r INSTALL_WD
+if [[ ! "$INSTALL_WD" =~ ^[nN]$ ]]; then
+    bash "$BASE_DIR/ella-watchdog" install
+fi
+
+# ---------------------------------------------------------------
 # FERTIG
 # ---------------------------------------------------------------
 echo ""
@@ -328,4 +355,10 @@ echo -e "  ${CYAN}ella owltrail test${NC}   Verbindung zu QuiteQue testen"
 echo -e "  ${CYAN}ella start${NC}           Ella-Pi starten"
 echo -e "  ${CYAN}ella status${NC}          Status prüfen"
 echo -e "  ${CYAN}ella help${NC}            Alle Befehle"
+echo -e "  ${CYAN}ella web status${NC}      Status-Webseite prüfen (http://localhost:8088/)"
+echo -e "  ${CYAN}ella owltrail budget show${NC}  Token-Kontingent prüfen"
+echo -e "  ${CYAN}ella watchdog status${NC} Watchdog-Status prüfen"
+echo ""
+echo -e "${GREY}Für eine separate Bot-User-Einrichtung (Admin verwaltet einen eigenen${NC}"
+echo -e "${GREY}Bot-Account): ella.conf.example nach ella.conf kopieren und BOT_USER setzen.${NC}"
 echo ""

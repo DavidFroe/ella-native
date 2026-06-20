@@ -14,17 +14,15 @@ shift 2>/dev/null
 # ── Hilfsfunktionen ──────────────────────────────────────────────
 
 _pid_running() {
-    [ -f "$OWLTRAIL_PID" ] || return 1
-    local pid; pid=$(head -1 "$OWLTRAIL_PID" 2>/dev/null)
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    bot_run "[ -f '$OWLTRAIL_PID' ] || exit 1; pid=\$(head -1 '$OWLTRAIL_PID' 2>/dev/null); [ -n \"\$pid\" ] && kill -0 \"\$pid\"" 2>/dev/null
 }
 
 _get_port() {
-    [ -f "$OWLTRAIL_PID" ] && sed -n '2p' "$OWLTRAIL_PID" 2>/dev/null
+    bot_run "[ -f '$OWLTRAIL_PID' ] && sed -n '2p' '$OWLTRAIL_PID'" 2>/dev/null
 }
 
 _get_pid() {
-    [ -f "$OWLTRAIL_PID" ] && head -1 "$OWLTRAIL_PID" 2>/dev/null
+    bot_run "[ -f '$OWLTRAIL_PID' ] && head -1 '$OWLTRAIL_PID'" 2>/dev/null
 }
 
 _http_ok() {
@@ -43,7 +41,7 @@ case "$CMD" in
             echo -e "${GREEN}✅ owltrail läuft bereits (PID $(_get_pid), Port ${PORT:-?})${NC}"
             exit 0
         fi
-        rm -f "$OWLTRAIL_PID"
+        bot_run "rm -f '$OWLTRAIL_PID'"
 
         if [ ! -f "$OWLTRAIL_CONF" ]; then
             echo -e "${RED}❌ owltrail.conf nicht gefunden: $OWLTRAIL_CONF${NC}"
@@ -52,11 +50,12 @@ case "$CMD" in
         fi
 
         echo -e "${CYAN}🦉 Starte owltrail Proxy...${NC}"
-        nohup python3 "$OWLTRAIL_RUNNER" \
-            --conf "$OWLTRAIL_CONF" \
-            --log  "$OWLTRAIL_LOG"  \
-            --pid  "$OWLTRAIL_PID"  \
-            >> "$OWLTRAIL_LOG" 2>&1 &
+        bot_run "nohup python3 '$OWLTRAIL_RUNNER' \
+            --conf '$OWLTRAIL_CONF' \
+            --log  '$OWLTRAIL_LOG'  \
+            --pid  '$OWLTRAIL_PID'  \
+            --tokens-log '$OWLTRAIL_TOKENS_LOG' \
+            >> '$OWLTRAIL_LOG' 2>&1 &"
 
         # Warte bis PID-Datei erscheint (max. 5 s)
         for i in 1 2 3 4 5; do
@@ -76,16 +75,16 @@ case "$CMD" in
     stop)
         if ! _pid_running; then
             echo -e "${YELLOW}⚠️  owltrail läuft nicht.${NC}"
-            rm -f "$OWLTRAIL_PID"
+            bot_run "rm -f '$OWLTRAIL_PID'"
             exit 0
         fi
         PID=$(_get_pid)
-        kill "$PID" 2>/dev/null
+        bot_run "kill '$PID'" 2>/dev/null
         sleep 1
-        if kill -0 "$PID" 2>/dev/null; then
-            kill -9 "$PID" 2>/dev/null
+        if bot_run "kill -0 '$PID'" 2>/dev/null; then
+            bot_run "kill -9 '$PID'" 2>/dev/null
         fi
-        rm -f "$OWLTRAIL_PID"
+        bot_run "rm -f '$OWLTRAIL_PID'"
         echo -e "${GREEN}✅ owltrail gestoppt (PID $PID).${NC}"
         ;;
 
@@ -114,13 +113,13 @@ case "$CMD" in
             fi
         else
             echo -e "   Prozess: ${RED}NICHT AKTIV${NC}"
-            rm -f "$OWLTRAIL_PID"
+            bot_run "rm -f '$OWLTRAIL_PID'"
         fi
         ;;
 
     log)
-        if [ -f "$OWLTRAIL_LOG" ]; then
-            tail -f "$OWLTRAIL_LOG"
+        if bot_run "[ -f '$OWLTRAIL_LOG' ]"; then
+            bot_run "tail -f '$OWLTRAIL_LOG'"
         else
             echo -e "${GREY}Noch kein Log vorhanden: $OWLTRAIL_LOG${NC}"
         fi
@@ -189,14 +188,149 @@ EOCONF
 
     # --- Kontextfenster ---
     context)
-        chmod +x "$BASE_DIR/ella-context"
         "$BASE_DIR/ella-context" "$@"
         ;;
 
     # --- Timeout ---
     timeout)
-        chmod +x "$BASE_DIR/ella-timeout"
         "$BASE_DIR/ella-timeout" "$@"
+        ;;
+
+    # --- Token-Verbrauch (In/Out, Kosten) ---
+    tokens)
+        SUB="${1:-show}"
+        if [ "$SUB" = "reset" ]; then
+            echo -e "${RED}🗑️  Lösche Token-Log...${NC}"
+            bot_run "rm -f '$OWLTRAIL_TOKENS_LOG'"
+            echo -e "${GREEN}✅ Token-Log geleert.${NC}"
+            exit 0
+        fi
+        echo -e "${BLUE}${BOLD}🪙 Token-Verbrauch (über owltrail)${NC}"
+        bot_python3 -c "
+import json, datetime
+
+GREY = '\033[90m'; CYAN = '\033[36m'; R = '\033[0m'; BOLD = '\033[1m'; GREEN = '\033[32m'
+
+def fmt(t):
+    if t is None: return '?'
+    if t >= 1000000: return f'{t/1000000:.1f}M'
+    if t >= 1000:    return f'{t/1000:.1f}K'
+    return str(t)
+
+rows = []
+try:
+    with open('$OWLTRAIL_TOKENS_LOG') as f:
+        for line in f:
+            line = line.strip()
+            if not line: continue
+            try: rows.append(json.loads(line))
+            except Exception: continue
+except FileNotFoundError:
+    pass
+
+if not rows:
+    print(f'  {GREY}Noch keine Daten — owltrail muss zuerst mindestens eine Anfrage verarbeitet haben.{R}')
+else:
+    today = datetime.date.today().isoformat()
+    def summarize(subset, label):
+        pin  = sum(r.get('prompt_tokens') or 0 for r in subset)
+        pout = sum(r.get('completion_tokens') or 0 for r in subset)
+        cost = sum(r.get('cost_usd') or 0 for r in subset)
+        print(f'  {BOLD}{label}{R}: {len(subset)} Requests · In={CYAN}{fmt(pin)}{R} Out={CYAN}{fmt(pout)}{R} Total={fmt(pin+pout)} · Kosten=\${cost:.4f}')
+
+    summarize(rows, 'Gesamt')
+    summarize([r for r in rows if r.get('ts','').startswith(today)], 'Heute')
+
+    print(f'\n  {BOLD}Pro Session/Chat:{R}')
+    by_session = {}
+    for r in rows:
+        sid = r.get('session') or 'unknown'
+        s = by_session.setdefault(sid, {'n':0,'pin':0,'pout':0,'cost':0.0})
+        s['n'] += 1
+        s['pin'] += r.get('prompt_tokens') or 0
+        s['pout'] += r.get('completion_tokens') or 0
+        s['cost'] += r.get('cost_usd') or 0
+    for sid, s in sorted(by_session.items(), key=lambda kv: -(kv[1]['pin']+kv[1]['pout']))[:15]:
+        label = sid if len(sid) <= 45 else sid[:42] + '...'
+        print(f'    {GREY}{label:<45}{R} {s[\"n\"]:>4}x  In={fmt(s[\"pin\"]):>6} Out={fmt(s[\"pout\"]):>6}  \${s[\"cost\"]:.4f}')
+    if 'unknown' in by_session and len(by_session) == 1:
+        print(f'\n  {GREY}⚠ Keine Session-IDs erkannt — diese OpenClaw-Version sendet keine Session-Affinity-Header an custom Provider (nicht im Config-Schema erlaubt). Aufschlüsselung pro Chat ist daher derzeit nicht möglich, nur Gesamt/Heute.{R}')
+"
+        ;;
+
+    # --- Token-Kontingent (Kostenkontrolle: Output-Token des Haupt-Bots) ---
+    budget)
+        SUB="${1:-show}"
+        shift 2>/dev/null
+        _parse_amount() {
+            case "$1" in
+                *[kK]) echo $(( ${1%[kK]} * 1000 )) ;;
+                *[mM]) echo $(( ${1%[mM]} * 1000000 )) ;;
+                [0-9]*) echo "$1" ;;
+                *) echo "" ;;
+            esac
+        }
+        case "$SUB" in
+            set|add|reset)
+                if [ "$SUB" = "reset" ]; then
+                    AMOUNT=56000
+                else
+                    AMOUNT=$(_parse_amount "$1")
+                    if [ -z "$AMOUNT" ]; then
+                        echo -e "${RED}Usage: ella owltrail budget set|add <n>[K|M]${NC}"
+                        exit 1
+                    fi
+                fi
+                REMAINING=$(bot_python3 -c "
+import json, sys
+path, sub, amount = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    with open(path, encoding='utf-8') as f: data = json.load(f)
+except Exception:
+    data = {'remaining': 0, 'total_consumed': 0}
+if sub == 'add':
+    data['remaining'] = (data.get('remaining') or 0) + amount
+else:
+    data['remaining'] = amount
+with open(path, 'w', encoding='utf-8') as f: json.dump(data, f)
+print(data['remaining'])
+" "$ELLA_TOKEN_BUDGET_FILE" "$SUB" "$AMOUNT")
+                case "$SUB" in
+                    add)   echo -e "${GREEN}✅ Kontingent aufgestockt (+${AMOUNT}) → jetzt: ${BOLD}${REMAINING}${NC} Token übrig${NC}" ;;
+                    reset) echo -e "${GREEN}✅ Kontingent zurückgesetzt → ${BOLD}${REMAINING}${NC} Token übrig${NC}" ;;
+                    set)   echo -e "${GREEN}✅ Kontingent gesetzt → ${BOLD}${REMAINING}${NC} Token übrig${NC}" ;;
+                esac
+                ;;
+            show|"")
+                echo -e "${BLUE}${BOLD}🎯 Token-Kontingent (Output-Token des Haupt-Bots)${NC}"
+                bot_python3 -c "
+import json
+GREY = '\033[90m'; CYAN = '\033[36m'; R = '\033[0m'; BOLD = '\033[1m'; RED = '\033[31m'; GREEN = '\033[32m'
+
+def fmt(t):
+    sign = '-' if t < 0 else ''
+    t = abs(t)
+    if t >= 1000000: return f'{sign}{t/1000000:.1f}M'
+    if t >= 1000:    return f'{sign}{t/1000:.1f}K'
+    return f'{sign}{t}'
+
+try:
+    with open('$ELLA_TOKEN_BUDGET_FILE', encoding='utf-8') as f:
+        data = json.load(f)
+except Exception:
+    data = {'remaining': 0, 'total_consumed': 0}
+remaining = data.get('remaining') or 0
+consumed = data.get('total_consumed') or 0
+color = GREEN if remaining > 0 else RED
+print(f'  Übrig:    {color}{BOLD}{fmt(remaining)}{R} Token')
+print(f'  Verbraucht (gesamt seit letztem Reset): {fmt(consumed)} Token')
+"
+                ;;
+            *)
+                echo -e "${RED}❌ Unbekannter budget-Befehl: $SUB${NC}"
+                exit 1
+                ;;
+        esac
         ;;
 
     # --- Direkt-Chat ---
@@ -223,6 +357,11 @@ EOCONF
         echo -e "  ${GREEN}ella owltrail context max${NC}     Maximum setzen"
         echo -e "  ${GREEN}ella owltrail context 32K${NC}     32.000 Tokens setzen"
         echo -e "  ${GREEN}ella owltrail timeout <sek>${NC}   Timeout setzen"
+        echo -e "${BOLD}Token-Kontingent (Kostenkontrolle):${NC}"
+        echo -e "  ${GREEN}ella owltrail budget show${NC}     Übriges Kontingent anzeigen"
+        echo -e "  ${GREEN}ella owltrail budget set <n>${NC}  Kontingent auf n setzen (z.B. 56K)"
+        echo -e "  ${GREEN}ella owltrail budget add <n>${NC}  Kontingent um n aufstocken"
+        echo -e "  ${GREEN}ella owltrail budget reset${NC}    Zurück auf Standard (56K)"
         echo -e "${BOLD}Direkt-Chat:${NC}"
         echo -e "  ${GREEN}ella owltrail chat \"text\"${NC}     Direkt mit LLM reden"
         echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

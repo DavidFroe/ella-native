@@ -1,0 +1,294 @@
+#!/usr/bin/env bash
+# ================================================================
+# ELLA WATCHDOG — überwacht, ob der Bot bei einer Aufgabe hängt
+#
+# Liest den Master-Task aus ella-task. Ist eine Aufgabe "in_progress"
+# aber seit ELLA_WATCHDOG_STALE_MIN Minuten kein Heartbeat mehr
+# eingegangen, wird per kurzem Lebenszeichen-Ping (wie ella-ask)
+# gegengeprüft. Antwortet der Bot dabei trotzdem -> nur Hinweis,
+# kein Neustart (falsch-positiv vermeiden). Antwortet er nicht ->
+#   1) Gateway wird neu gestartet
+#   2) Task wird als "recovered" markiert (kein Restart-Loop)
+#   3) Best-effort Hinweis in den ursprünglichen Telegram-Chat
+# ================================================================
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source "$BASE_DIR/ella-core"
+
+STALE_MIN="${ELLA_WATCHDOG_STALE_MIN:-15}"
+RECOVERY_STALE_MIN="${ELLA_WATCHDOG_RECOVERY_STALE_MIN:-10}"
+SESSIONS_DIR="$BOT_USER_HOME/.openclaw/agents/main/sessions"
+SUB="${1:-check}"
+shift 2>/dev/null
+
+_log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$ELLA_WATCHDOG_LOG"
+}
+
+# Schickt eine Nachricht in die ursprüngliche Telegram-Session.
+# session_key Format: agent:main:telegram:group:-5532952400 / agent:main:telegram:direct:123456
+# $1/$2 werden als echte argv-Werte durchgereicht (nie in den Skripttext
+# interpoliert) — Sonderzeichen im Aufgabentext können so nichts ausbrechen.
+_notify_session() {
+    local session="$1" msg="$2" chat_id
+    case "$session" in *telegram*) ;; *) return 0 ;; esac
+    chat_id=$(echo "$session" | awk -F: '{print $NF}')
+    [ -z "$chat_id" ] && return 0
+    if [ "$BOT_USER" = "$(whoami)" ]; then
+        bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw message send --channel telegram --target "$1" --message "$2"' _ "$chat_id" "$msg" >/dev/null 2>&1
+    else
+        sudo -u "$BOT_USER" bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw message send --channel telegram --target "$1" --message "$2"' _ "$chat_id" "$msg" >/dev/null 2>&1
+    fi
+}
+
+# Kurzer Lebenszeichen-Ping an den Agenten (eigene Session, kurzer Timeout).
+# Gibt 0 zurück wenn der Bot grundsätzlich noch antwortet.
+_ping_agent() {
+    # Dieses Backend antwortet im Normalfall auch bei gesunder Last erst nach
+    # 20-65s (siehe owltrail-Log) — ein zu knapper Timeout würde gesunde,
+    # nur langsame Anfragen als "hängend" fehlinterpretieren.
+    timeout 100 "$OPENCLAW_BIN" agent --agent main --session-key "agent:main:watchdog-ping" \
+        --message "ping" --timeout 90 >/dev/null 2>&1
+}
+
+# Stößt die ursprüngliche Aufgabe nach einem Neustart erneut in der gleichen
+# Session an — läuft im Hintergrund (kann wieder lange dauern). $1/$2 als
+# echte argv-Werte, gleiches Prinzip wie _notify_session.
+_reinject_task() {
+    local session="$1" task="$2"
+    if [ "$BOT_USER" = "$(whoami)" ]; then
+        nohup bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw agent --agent main --session-key "$1" --message "$2" --deliver' _ "$session" "$task" >> "$ELLA_WATCHDOG_LOG" 2>&1 &
+    else
+        sudo -u "$BOT_USER" bash -lc 'source "$HOME/.nvm/nvm.sh" 2>/dev/null; openclaw agent --agent main --session-key "$1" --message "$2" --deliver' _ "$session" "$task" >> "$ELLA_WATCHDOG_LOG" 2>&1 &
+    fi
+    disown 2>/dev/null
+}
+
+# Fuehrt die Wiederaufnahme einer an einem Kontext-Ueberlauf abgestuerzten
+# Session aus: Session leeren (wie blitzdings), Fortsetzungs-Prompt (von
+# ella-crash-recover.py via Gemma erzeugt) als Master-Task eintragen --
+# aber nur, wenn der Aufgabenspeicher frei ist oder schon dieselbe Session
+# betrifft (kein versehentliches Ueberschreiben eines fremden Tasks),
+# Gateway neu starten, Prompt reinjizieren, Nutzer informieren.
+_do_crash_recovery() {
+    local session="$1" prompt_file="$2" label="$3" prompt ex_status ex_session
+    prompt=$(cat "$prompt_file" 2>/dev/null)
+    rm -f "$prompt_file"
+    if [ -z "$prompt" ]; then
+        _log "Crash-Recovery: leerer Prompt fuer $session, abgebrochen"
+        return
+    fi
+    _log "Crash-Recovery ausgeloest fuer Session $session: $label"
+    echo -e "${RED}🚨 Watchdog: Kontext-Ueberlauf erkannt -- Session $session haengt fest.${NC}"
+    echo -e "${YELLOW}🧠 Gemma-Analyse: $label${NC}"
+
+    bot_python3 "$BASE_DIR/ella-session-clear.py" "$SESSIONS_DIR" "$session" >> "$ELLA_WATCHDOG_LOG" 2>&1
+
+    local out=$(bot_python3 "$BASE_DIR/ella-task.py" show "$ELLA_TASK_FILE")
+    ex_status=$(echo "$out" | grep '^STATUS:' | cut -d: -f2-)
+    ex_session=$(echo "$out" | grep '^SESSION:' | cut -d: -f2-)
+    if [ "$ex_status" != "in_progress" ] || [ "$ex_session" = "$session" ]; then
+        bot_python3 "$BASE_DIR/ella-task.py" set "$ELLA_TASK_FILE" "🚨 Crash-Recovery: $label" "$session" crash_recovery > /dev/null
+    else
+        _log "Crash-Recovery: Aufgabenspeicher durch anderen Task belegt -- kein Tracking, nur Wiederanstossen"
+    fi
+
+    echo -e "${YELLOW}🔄 Starte Gateway neu...${NC}"
+    bash "$BASE_DIR/ella-openclaw" restart >> "$ELLA_WATCHDOG_LOG" 2>&1
+
+    local full_prompt="${prompt}
+
+(System-Hinweis: Diese Wiederaufnahme wird automatisch ueberwacht. Ruf bitte regelmaessig \"ella task heartbeat\" auf, waehrend du arbeitest, und \"ella task done\", wenn du fertig bist.)"
+    _reinject_task "$session" "$full_prompt"
+    _notify_session "$session" "⚠️ Ich bin wegen eines Kontext-Ueberlaufs abgestuerzt. Hab den Verlauf analysiert und mache automatisch weiter: $label"
+}
+
+# Lässt Gemma anhand der juengsten Nachrichten in der Session beurteilen, ob
+# eine Crash-Recovery-Aufgabe erledigt ist (DONE/NOT_DONE). Robuster als ein
+# reiner Lebenszeichen-Ping, da der Bot bei dieser automatisch reinjizierten
+# Aufgabe ggf. nicht selbst an "ella task done" denkt.
+_judge_crash_recovery_done() {
+    local session="$1" task="$2" tmp verdict
+    tmp=$(bot_run "mktemp -p '$BOT_USER_HOME' .ella_judge_tail_XXXXXX" 2>/dev/null)
+    [ -z "$tmp" ] && { echo "NOT_DONE"; return; }
+    bot_python3 -c "
+import json, os, sys
+sessions_dir, key = sys.argv[1], sys.argv[2]
+try:
+    with open(os.path.join(sessions_dir, 'sessions.json'), encoding='utf-8') as f:
+        store = json.load(f)
+    sid = store.get(key, {}).get('sessionId')
+    if not sid:
+        sys.exit(1)
+    path = os.path.join(sessions_dir, sid + '.jsonl')
+    size = os.path.getsize(path)
+    with open(path, encoding='utf-8', errors='replace') as f:
+        if size > 12000:
+            f.seek(size - 12000)
+        sys.stdout.write(f.read())
+except Exception:
+    sys.exit(1)
+" "$SESSIONS_DIR" "$session" > "$tmp" 2>/dev/null
+    if [ ! -s "$tmp" ]; then
+        bot_run "rm -f '$tmp'" 2>/dev/null
+        echo "NOT_DONE"
+        return
+    fi
+    verdict=$(bot_python3 "$BASE_DIR/ella-gemma-assist.py" judge-done "$task" "$tmp" 2>>"$ELLA_WATCHDOG_LOG" | head -1 | tr -d '\r')
+    bot_run "rm -f '$tmp'" 2>/dev/null
+    echo "${verdict:-NOT_DONE}"
+}
+
+case "$SUB" in
+    check)
+        # --- Kontext-Ueberlauf-Erkennung (eigenstaendig vom Task-Heartbeat) ---
+        # Liest neue Zeilen im Gateway-Log seit dem letzten Check; erkennt
+        # Sessions, die wiederholt an "Context is too large" haengen, lässt
+        # Gemma einen Fortsetzungs-Prompt erstellen und stoesst die Wiederaufnahme an.
+        while IFS=$'\t' read -r KIND_LINE A B C; do
+            case "$KIND_LINE" in
+                RECOVER) _do_crash_recovery "$A" "$B" "$C" ;;
+                GIVEUP)
+                    _log "GIVEUP Crash-Recovery fuer Session $A: $B"
+                    _notify_session "$A" "❌ Ich bin nach mehreren automatischen Crash-Recovery-Versuchen weiterhin an einem Kontext-Ueberlauf haengen geblieben ($B). Bitte manuell pruefen."
+                    ;;
+            esac
+        done < <(bot_python3 "$BASE_DIR/ella-crash-recover.py" check 2>>"$ELLA_WATCHDOG_LOG")
+
+        OUT=$(bot_python3 "$BASE_DIR/ella-task.py" show "$ELLA_TASK_FILE")
+        STATUS=$(echo "$OUT" | grep '^STATUS:' | cut -d: -f2-)
+
+        if [ "$STATUS" != "in_progress" ]; then
+            _log "OK — kein aktiver Auftrag (status=$STATUS)"
+            echo -e "${GREEN}✅ Watchdog: kein aktiver Auftrag.${NC}"
+            exit 0
+        fi
+
+        TASK=$(echo "$OUT" | grep '^TASK:' | cut -d: -f2-)
+        SESSION=$(echo "$OUT" | grep '^SESSION:' | cut -d: -f2-)
+        AGE=$(echo "$OUT" | grep '^HEARTBEAT_AGE_MIN:' | cut -d: -f2-)
+        RETRY_COUNT=$(echo "$OUT" | grep '^RETRY_COUNT:' | cut -d: -f2-)
+        RETRY_COUNT="${RETRY_COUNT:-0}"
+        KIND=$(echo "$OUT" | grep '^KIND:' | cut -d: -f2-)
+        MAX_RETRIES="${ELLA_WATCHDOG_MAX_RETRIES:-2}"
+        EFFECTIVE_STALE_MIN="$STALE_MIN"
+        [ "$KIND" = "crash_recovery" ] && EFFECTIVE_STALE_MIN="$RECOVERY_STALE_MIN"
+
+        if [ -z "$AGE" ] || [ "$AGE" -lt 0 ]; then
+            _log "WARN — Task aktiv, aber kein Heartbeat-Zeitstempel lesbar"
+            exit 0
+        fi
+
+        if [ "$AGE" -lt "$EFFECTIVE_STALE_MIN" ]; then
+            _log "OK — Bot arbeitet, Heartbeat vor ${AGE}m (Schwelle ${EFFECTIVE_STALE_MIN}m): $TASK"
+            echo -e "${GREEN}✅ Watchdog: Bot arbeitet noch (Heartbeat vor ${AGE} Min.).${NC}"
+            exit 0
+        fi
+
+        if [ "$KIND" = "crash_recovery" ]; then
+            VERDICT=$(_judge_crash_recovery_done "$SESSION" "$TASK")
+            if [ "$VERDICT" = "DONE" ]; then
+                bot_python3 "$BASE_DIR/ella-task.py" done "$ELLA_TASK_FILE" > /dev/null
+                _log "Crash-Recovery-Aufgabe laut Gemma erledigt: $TASK"
+                echo -e "${GREEN}✅ Watchdog: Crash-Recovery-Aufgabe laut Gemma erledigt.${NC}"
+                exit 0
+            fi
+            _log "Crash-Recovery-Aufgabe laut Gemma noch nicht fertig (oder kein Urteil moeglich): $TASK"
+        fi
+
+        echo -e "${YELLOW}⏱  Heartbeat seit ${AGE} Min. überfällig (Schwelle ${EFFECTIVE_STALE_MIN}m). Bestätige per Ping...${NC}"
+        if _ping_agent; then
+            _log "Heartbeat überfällig (${AGE}m), aber Ping erfolgreich -> kein Neustart. Task: $TASK"
+            echo -e "${YELLOW}⚠️  Bot reagiert noch auf Ping — kein Neustart, nur Beobachtung.${NC}"
+            exit 0
+        fi
+
+        # --- STUCK erkannt: Heartbeat überfällig UND Ping ohne Antwort ---
+        _log "STUCK erkannt — kein Heartbeat seit ${AGE}m, Ping ohne Antwort. Task: $TASK Session: $SESSION (Versuch ${RETRY_COUNT}/${MAX_RETRIES})"
+        echo -e "${RED}🚨 Watchdog: Bot hängt seit ${AGE} Min. bei: $TASK${NC}"
+
+        echo -e "${YELLOW}🔄 Starte Gateway neu...${NC}"
+        bash "$BASE_DIR/ella-openclaw" restart >> "$ELLA_WATCHDOG_LOG" 2>&1
+
+        if [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ] && [ -n "$SESSION" ] && [ "$SESSION" != "?" ] && [ -n "$TASK" ]; then
+            NEW_COUNT=$(bot_python3 "$BASE_DIR/ella-task.py" retry "$ELLA_TASK_FILE")
+            _log "Gateway neu gestartet. Stoße Aufgabe automatisch erneut an (Versuch ${NEW_COUNT}/${MAX_RETRIES})."
+            echo -e "${YELLOW}🔁 Stoße Aufgabe erneut an (Versuch ${NEW_COUNT}/${MAX_RETRIES})...${NC}"
+            _reinject_task "$SESSION" "$TASK"
+            _notify_session "$SESSION" "⚠️ Ich bin bei \"$TASK\" hängen geblieben (kein Lebenszeichen seit ${AGE} Min.). Hab mich neu gestartet und versuche es automatisch erneut (Versuch ${NEW_COUNT}/${MAX_RETRIES})."
+        else
+            bot_python3 "$BASE_DIR/ella-task.py" fail "$ELLA_TASK_FILE" > /dev/null
+            _log "Max. Versuche (${MAX_RETRIES}) erreicht oder Session/Task unbekannt — gebe auf, kein weiterer Auto-Retry."
+            if [ -n "$SESSION" ] && [ "$SESSION" != "?" ]; then
+                _notify_session "$SESSION" "❌ Ich bin bei \"$TASK\" wiederholt hängen geblieben und gebe nach ${MAX_RETRIES} automatischen Versuchen auf. Gateway wurde neu gestartet — bitte manuell prüfen."
+            fi
+        fi
+        ;;
+
+    status)
+        echo -e "${BLUE}${BOLD}🐕 Watchdog Status${NC}"
+        echo -e "  ${GREY}Schwelle: ${STALE_MIN} Min. ohne Heartbeat + Ping ohne Antwort = hängend${NC}"
+        echo
+        bash "$BASE_DIR/ella-task" show
+        echo
+        if [ -f "$ELLA_WATCHDOG_LOG" ]; then
+            echo -e "${BOLD}Letzte Watchdog-Einträge:${NC}"
+            tail -n 5 "$ELLA_WATCHDOG_LOG" | sed "s/^/  ${GREY}/;s/\$/${NC}/"
+        fi
+        ;;
+
+    log)
+        if [ -f "$ELLA_WATCHDOG_LOG" ]; then
+            tail -f "$ELLA_WATCHDOG_LOG"
+        else
+            echo -e "${GREY}Noch kein Watchdog-Log vorhanden: $ELLA_WATCHDOG_LOG${NC}"
+        fi
+        ;;
+
+    install)
+        echo -e "${CYAN}🐕 Installiere Watchdog-Timer (systemd --user, alle 5 Min.)...${NC}"
+        UNIT_DIR="$BOT_USER_HOME/.config/systemd/user"
+        bot_run "mkdir -p '$UNIT_DIR'"
+
+        SERVICE_CONTENT="[Unit]
+Description=Ella Watchdog Check
+
+[Service]
+Type=oneshot
+Environment=HOME=$BOT_USER_HOME
+ExecStart=/bin/bash -lc \"source $BOT_USER_HOME/.nvm/nvm.sh 2>/dev/null; $BASE_DIR/ella-watchdog check\"
+"
+        TIMER_CONTENT="[Unit]
+Description=Ella Watchdog Timer (alle 5 Minuten)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"
+        bot_python3 -c "import sys; open(sys.argv[1], 'w').write(sys.argv[2])" "$UNIT_DIR/ella-watchdog.service" "$SERVICE_CONTENT"
+        bot_python3 -c "import sys; open(sys.argv[1], 'w').write(sys.argv[2])" "$UNIT_DIR/ella-watchdog.timer" "$TIMER_CONTENT"
+
+        bot_run "export XDG_RUNTIME_DIR=/run/user/\$(id -u); systemctl --user daemon-reload && systemctl --user enable --now ella-watchdog.timer"
+        echo -e "${GREEN}✅ Watchdog-Timer installiert und aktiv.${NC}"
+        bot_run "export XDG_RUNTIME_DIR=/run/user/\$(id -u); systemctl --user list-timers ella-watchdog.timer --no-pager" 2>/dev/null
+        ;;
+
+    --help|-h)
+        echo -e "${BLUE}${BOLD}🐕 ELLA WATCHDOG${NC}"
+        echo -e "${GREY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${GREEN}ella watchdog check${NC}     Einmaliger Check (auch vom Timer genutzt)"
+        echo -e "  ${GREEN}ella watchdog status${NC}    Aktueller Task + letzte Watchdog-Einträge"
+        echo -e "  ${GREEN}ella watchdog log${NC}       Live-Log"
+        echo -e "  ${GREEN}ella watchdog install${NC}   Timer installieren (alle 5 Min., persistent über Reboot)"
+        echo -e "${GREY}  Bei Hänger: Neustart + automatischer Retry (max. ${ELLA_WATCHDOG_MAX_RETRIES:-2}x, dann Aufgabe -> failed)${NC}"
+        ;;
+
+    *)
+        echo -e "${RED}❌ Unbekannter watchdog-Befehl: $SUB${NC}"
+        echo -e "   ella watchdog --help"
+        exit 1
+        ;;
+esac

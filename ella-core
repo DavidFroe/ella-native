@@ -5,17 +5,44 @@
 # ================================================================
 export ELLA_VERSION="10.0"
 
+# --- KONFIGURATION LADEN ---
+[ -f "$BASE_DIR/ella.conf" ] && source "$BASE_DIR/ella.conf"
+[ -f "$HOME/.ella.conf" ]    && source "$HOME/.ella.conf"
+
+# Fallback wenn BOT_USER nicht in ella.conf gesetzt
+export BOT_USER="${BOT_USER:-$(whoami)}"
+export BOT_USER_HOME="/home/$BOT_USER"
+export BOT_OPENCLAW_JSON="$BOT_USER_HOME/.openclaw/openclaw.json"
+
+# Führt einen Befehl als BOT_USER aus (via sudo wenn nötig)
+bot_run() {
+    if [ "$BOT_USER" = "$(whoami)" ]; then
+        bash -lc "$*"
+    else
+        sudo -u "$BOT_USER" bash -lc "source /home/$BOT_USER/.nvm/nvm.sh 2>/dev/null; $*"
+    fi
+}
+
+# Führt python3 als BOT_USER aus
+bot_python3() {
+    if [ "$BOT_USER" = "$(whoami)" ]; then
+        python3 "$@"
+    else
+        sudo -u "$BOT_USER" python3 "$@"
+    fi
+}
+
 # --- NATIVE KONFIGURATION ---
 export THOUGHT_FILE="$HOME/.ella_thoughts"
 export LOG_FILE="$HOME/.ella.log"
-export OPENCLAW_JSON_PATH="$HOME/.config/openclaw-kibot/.openclaw/openclaw.json"
+export OPENCLAW_JSON_PATH="$BOT_OPENCLAW_JSON"
 export CONFIG_FILE="$OPENCLAW_JSON_PATH"
 export OPENCLAW_CONFIG_PATH="$OPENCLAW_JSON_PATH"
 export GATEWAY_PORT=18789
 export OWLTRAIL_PORT=8081
 
 # Automatische Pfad-Erkennung für native Binaries
-# Wenn openclaw nicht im PATH: Wrapper nutzen, der als klauski-User läuft
+# Wenn openclaw nicht im PATH: Wrapper nutzen, der als BOT_USER läuft
 if which openclaw &>/dev/null; then
     export OPENCLAW_BIN=$(which openclaw)
 elif [ -x "$BASE_DIR/ella-oc" ]; then
@@ -28,8 +55,15 @@ fi
 export OWLTRAIL_PY="$BASE_DIR/owltrail.py"
 export OWLTRAIL_RUNNER="$BASE_DIR/ella-owltrail-runner.py"
 export OWLTRAIL_CONF="${OWLTRAIL_CONF:-$BASE_DIR/owltrail.conf}"
-export OWLTRAIL_LOG="$HOME/.ella_owltrail.log"
-export OWLTRAIL_PID="$HOME/.ella_owltrail.pid"
+export OWLTRAIL_LOG="$BOT_USER_HOME/.ella_owltrail.log"
+export OWLTRAIL_PID="$BOT_USER_HOME/.ella_owltrail.pid"
+export OWLTRAIL_TOKENS_LOG="$BOT_USER_HOME/.ella_tokens.jsonl"
+export ELLA_TOKEN_BUDGET_FILE="$BOT_USER_HOME/.ella_token_budget.json"
+
+# Aufgabenspeicher + Watchdog (Bot dokumentiert eigene Aufgaben, ella prüft Lebenszeichen)
+export ELLA_TASK_FILE="$BOT_USER_HOME/.ella_task.json"
+export ELLA_WATCHDOG_LOG="$BOT_USER_HOME/.ella_watchdog.log"
+export ELLA_WATCHDOG_STALE_MIN="${ELLA_WATCHDOG_STALE_MIN:-15}"
 
 # --- PERMISSION & TOKEN INITIALIZATION ---
 fix_permissions() {
@@ -61,12 +95,12 @@ export_gateway_token() {
 
 
 sync_tokens() {
-    # Gateway Config = Quelle der Wahrheit für Tokens
-    GW_CONFIG="$HOME/.openclaw/openclaw.json"
+    # Gateway Config = Quelle der Wahrheit für Tokens (immer BOT_USER, nicht $HOME!)
+    GW_CONFIG="$BOT_USER_HOME/.openclaw/openclaw.json"
     KIBOT_CONFIG="$OPENCLAW_JSON_PATH"
-    AUTH_FILE="$HOME/.openclaw/agents/main/agent/auth-profiles.json"
+    AUTH_FILE="$BOT_USER_HOME/.openclaw/agents/main/agent/auth-profiles.json"
 
-    python3 -c "
+    bot_python3 -c "
 import json, os
 
 gw_path = '$GW_CONFIG'
@@ -83,10 +117,11 @@ if os.path.exists(gw_path):
     if 'models' not in gw: gw['models'] = {}
     if 'providers' not in gw['models']: gw['models']['providers'] = {}
     prov = gw['models']['providers'].get('custom-localhost-8081', {})
-    if not prov or 'api' not in prov:
+    if not prov or 'api' not in prov or 'apiKey' not in prov:
         gw['models']['providers']['custom-localhost-8081'] = {
             'api': 'openai-completions',
             'baseUrl': 'http://localhost:8081/v1',
+            'apiKey': 'ella',
             'models': prov.get('models', [{'id': 'auto', 'name': 'auto'}])
         }
         if 'agents' not in gw: gw['agents'] = {}
@@ -162,21 +197,25 @@ log_debug() {
 
 # --- NATIVE HELFER ---
 get_token() {
-    # Klauski-Config bevorzugen (Gateway Quelle der Wahrheit)
-    for cfg in "/home/klauski/.openclaw/openclaw.json" "$CONFIG_FILE" "$HOME/.openclaw/openclaw.json"; do
-        if [ -f "$cfg" ]; then
+    # Bot-User-Config bevorzugen (Gateway Quelle der Wahrheit)
+    for cfg in "$BOT_OPENCLAW_JSON" "$CONFIG_FILE" "$HOME/.openclaw/openclaw.json"; do
+        [ -f "$cfg" ] || continue
+        # Erst direkt versuchen, sonst sudo als BOT_USER
+        if [ -r "$cfg" ]; then
             TOKEN=$(python3 -c "import json; c=json.load(open('$cfg')); print(c.get('gateway',{}).get('auth',{}).get('token',''))" 2>/dev/null)
-            if [ -n "$TOKEN" ] && [ "$TOKEN" != "None" ]; then
-                echo "$TOKEN"
-                return 0
-            fi
+        else
+            TOKEN=$(sudo -u "$BOT_USER" python3 -c "import json; c=json.load(open('$cfg')); print(c.get('gateway',{}).get('auth',{}).get('token',''))" 2>/dev/null)
+        fi
+        if [ -n "$TOKEN" ] && [ "$TOKEN" != "None" ]; then
+            echo "$TOKEN"
+            return 0
         fi
     done
     echo "NO_TOKEN"
 }
 
 check_gw_process() {
-    pgrep -f "openclaw gateway|openclaw-gateway" > /dev/null
+    pgrep -f "openclaw/dist/index.js gateway" > /dev/null
     return $?
 }
 

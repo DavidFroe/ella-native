@@ -223,7 +223,6 @@ case "$CMD" in
 
     # --- Sessions ---
     sessions)
-        chmod +x $BASE_DIR/ella-sessions
         $BASE_DIR/ella-sessions "$@"
         ;;
 
@@ -235,7 +234,6 @@ case "$CMD" in
         ;;
     context)
         echo -e "${BLUE}🐾 Kontext (owltrail ist Master):${NC}"
-        chmod +x $BASE_DIR/ella-context
         $BASE_DIR/ella-context show
         echo -e "${GREY}  Zum Setzen: ella owltrail context <größe>${NC}"
         ;;

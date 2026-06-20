@@ -15,9 +15,16 @@ echo -e "${GREEN}OK${NC}"
 sync_tokens
 export_gateway_token
 
-# 3. OPENCLAW GATEWAY (Native Launch)
+# 3. OPENCLAW GATEWAY (Native Launch als BOT_USER)
 echo -ne "  🚀 Launching OpenClaw Gateway... "
-nohup $OPENCLAW_BIN gateway --force --bind 0.0.0.0 > "$HOME/.ella_gw.log" 2>&1 &
+GW_LOG="$BOT_USER_HOME/.openclaw-gateway.log"
+GW_PID="$BOT_USER_HOME/.openclaw-gateway.pid"
+sudo -u "$BOT_USER" bash -c "
+    source /home/$BOT_USER/.nvm/nvm.sh 2>/dev/null
+    export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+    nohup openclaw gateway > '$GW_LOG' 2>&1 &
+    echo \$! > '$GW_PID'
+" 2>/dev/null
 sleep 2
 
 # 4. HEALTH CHECK LOOP

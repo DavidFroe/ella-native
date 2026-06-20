@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# ================================================================
+# ELLA ALCOHOL — Klauskis Alkoholstand (IDENTITY.md)
+# ================================================================
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source "$BASE_DIR/ella-core"
+
+IDENTITY_FILE="$BOT_USER_HOME/.openclaw/workspace/IDENTITY.md"
+SUB="${1:-show}"
+shift 2>/dev/null
+
+case "$SUB" in
+    show)
+        VAL=$(bot_python3 "$BASE_DIR/ella-alcohol.py" "$IDENTITY_FILE" show 2>&1)
+        echo -e "${BLUE}🥃 Alkoholstand: ${BOLD}${VAL}${NC}"
+        ;;
+    burn)
+        N="${1:--1}"
+        [[ "$N" =~ ^-?[0-9]+$ ]] || N=1
+        AMOUNT=$(( N < 0 ? N : -N ))  # burn ist immer negativ, egal ob mit/ohne Vorzeichen angegeben
+        NEW=$(bot_python3 "$BASE_DIR/ella-alcohol.py" "$IDENTITY_FILE" "$AMOUNT" 2>&1)
+        echo -e "${YELLOW}🔥 Alkohol verbrannt (${AMOUNT}) → jetzt: ${BOLD}${NEW}${NC}"
+        ;;
+    add)
+        N="${1:-1}"
+        [[ "$N" =~ ^-?[0-9]+$ ]] || N=1
+        NEW=$(bot_python3 "$BASE_DIR/ella-alcohol.py" "$IDENTITY_FILE" "$N" 2>&1)
+        echo -e "${GREEN}🥃 Alkohol hinzugefügt (+${N}) → jetzt: ${BOLD}${NEW}${NC}"
+        ;;
+    --help|-h)
+        echo -e "${BLUE}${BOLD}🥃 ELLA ALCOHOL${NC}"
+        echo -e "  ${GREEN}ella alcohol show${NC}       Aktuellen Stand anzeigen"
+        echo -e "  ${GREEN}ella alcohol burn [n]${NC}   Alkohol verbrennen (Default: 1) — während der Arbeit"
+        echo -e "  ${GREEN}ella alcohol add [n]${NC}    Alkohol hinzufügen (Default: 1)"
+        ;;
+    *)
+        echo -e "${RED}❌ Unbekannter alcohol-Befehl: $SUB${NC}"
+        exit 1
+        ;;
+esac

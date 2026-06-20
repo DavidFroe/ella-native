@@ -7,7 +7,7 @@ COMMAND="$1"
 # 1. SMART DIRECT ASK (Nativ)
 if [[ "$COMMAND" != --* ]] && [ -n "$COMMAND" ]; then
     case "$COMMAND" in
-        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|sessions|tele|models|context|timeout|test-llm|version|channel|whatsapp|wa|telegram|tg|owltrail|openclaw|gateway|repair|quiteque|qq|deepthink)
+        status|start|stop|restart|help|backup|restore|migrate|logs|tail|tui|diagnose|chat|debug|top|task|watchdog|web|alcohol|sessions|tele|models|context|timeout|test-llm|version|channel|whatsapp|wa|telegram|tg|owltrail|openclaw|gateway|repair|quiteque|qq|deepthink)
             COMMAND="--$COMMAND"
             ;;
         *)
@@ -72,11 +72,16 @@ case "$COMMAND" in
         # Kill zombies on Gateway port only (not owltrail!)
         sudo fuser -k $GATEWAY_PORT/tcp > /dev/null 2>&1 || true
         
-        # Start Gateway via OpenClaw (systemd)
+        # Start Gateway (kein systemd hier — Hintergrundprozess via nohup als BOT_USER)
         echo -ne "  🚀 Launching Gateway...  "
-        GW_LOG=$(mktemp)
-        $OPENCLAW_BIN gateway start > "$GW_LOG" 2>&1
-        # Gateway braucht nach systemd-restart etwas bis HTTP ready ist
+        GW_LOG="$BOT_USER_HOME/.openclaw-gateway.log"
+        GW_PID="$BOT_USER_HOME/.openclaw-gateway.pid"
+        sudo -u "$BOT_USER" bash -c "
+            source /home/$BOT_USER/.nvm/nvm.sh 2>/dev/null
+            export XDG_RUNTIME_DIR=/run/user/\$(id -u)
+            nohup openclaw gateway > '$GW_LOG' 2>&1 &
+            echo \$! > '$GW_PID'
+        " 2>/dev/null
         GW_OK=false
         for i in $(seq 1 8); do
             if check_gw_http; then
@@ -92,11 +97,8 @@ case "$COMMAND" in
             echo -e " ${YELLOW}STARTING${NC} (Prozess läuft, HTTP noch nicht ready)"
         else
             echo -e " ${RED}FAILED${NC}"
-            if [ -s "$GW_LOG" ]; then
-                echo -e "${GREY}$(cat "$GW_LOG")${NC}"
-            fi
+            bot_run "tail -n 15 '$GW_LOG'" 2>/dev/null | sed "s/^/${GREY}/"
         fi
-        rm -f "$GW_LOG"
         
         # Start owltrail (integrierte Bibliothek)
         echo -ne "  🦉 Launching owltrail... "
@@ -112,7 +114,7 @@ case "$COMMAND" in
 
     --stop)
         echo -e "${YELLOW}🛑 Stopping Ella Components...${NC}"
-        $OPENCLAW_BIN gateway stop > /dev/null 2>&1 || pkill -f "openclaw gateway" 2>/dev/null || true
+        bot_run "pkill -x openclaw" 2>/dev/null || true
         bash "$BASE_DIR/ella-owltrail" stop 2>/dev/null || true
         echo -e "${GREEN}Cleaned up all processes.${NC}"
         ;;
@@ -136,7 +138,6 @@ case "$COMMAND" in
         ;;
 
     --repair)
-        chmod +x $BASE_DIR/ella-repair
         $BASE_DIR/ella-repair
         ;;
 
@@ -168,7 +169,6 @@ case "$COMMAND" in
         ;;
 
     --migrate)
-        chmod +x $BASE_DIR/ella-migrate
         $BASE_DIR/ella-migrate
         ;;
 
@@ -188,6 +188,24 @@ case "$COMMAND" in
     # --- OWLTRAIL PROXY ---
     --owltrail)
         bash $BASE_DIR/ella-owltrail $PARAM
+        ;;
+
+    # --- AUFGABENSPEICHER & WATCHDOG ---
+    --task)
+        bash "$BASE_DIR/ella-task" "$@"
+        ;;
+    --watchdog)
+        bash "$BASE_DIR/ella-watchdog" "$@"
+        ;;
+
+    # --- STATUS-/SKILLS-WEBSEITE ---
+    --web)
+        bash "$BASE_DIR/ella-web" "$@"
+        ;;
+
+    # --- ALKOHOLSTAND (Klauski) ---
+    --alcohol)
+        bash "$BASE_DIR/ella-alcohol" "$@"
         ;;
 
     # --- QUITEQUE MIDDLEWARE ---

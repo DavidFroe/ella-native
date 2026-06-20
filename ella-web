@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# ================================================================
+# ELLA WEB — Status-/Skills-Webseite des Bots (klauski)
+# ================================================================
+BASE_DIR=$(dirname "$(readlink -f "$0")")
+source "$BASE_DIR/ella-core"
+
+export ELLA_WEB_PORT="${ELLA_WEB_PORT:-8088}"
+export ELLA_WEB_PID="$BOT_USER_HOME/.ella_web.pid"
+export ELLA_WEB_LOG="$BOT_USER_HOME/.ella_web.log"
+
+CMD="${1:-status}"
+
+_pid_running() {
+    bot_run "[ -f '$ELLA_WEB_PID' ] || exit 1; pid=\$(cat '$ELLA_WEB_PID' 2>/dev/null); [ -n \"\$pid\" ] && kill -0 \"\$pid\"" 2>/dev/null
+}
+
+case "$CMD" in
+    start)
+        if _pid_running; then
+            echo -e "${GREEN}✅ ella-web läuft bereits (Port $ELLA_WEB_PORT)${NC}"
+            exit 0
+        fi
+        bot_run "BOT_USER_HOME='$BOT_USER_HOME' nohup python3 '$BASE_DIR/ella-web.py' '$ELLA_WEB_PORT' >> '$ELLA_WEB_LOG' 2>&1 & echo \$! > '$ELLA_WEB_PID'"
+        sleep 1
+        if _pid_running; then
+            echo -e "${GREEN}✅ ella-web gestartet → http://localhost:${ELLA_WEB_PORT}/${NC}"
+        else
+            echo -e "${RED}❌ Start fehlgeschlagen — siehe $ELLA_WEB_LOG${NC}"
+        fi
+        ;;
+    stop)
+        if _pid_running; then
+            bot_run "kill \$(cat '$ELLA_WEB_PID') 2>/dev/null; rm -f '$ELLA_WEB_PID'"
+            echo -e "${GREEN}✅ ella-web gestoppt.${NC}"
+        else
+            echo -e "${YELLOW}⚠️  ella-web läuft nicht.${NC}"
+        fi
+        ;;
+    restart)
+        "$0" stop
+        sleep 1
+        "$0" start
+        ;;
+    status)
+        if _pid_running; then
+            echo -e "${GREEN}✅ ella-web läuft → http://localhost:${ELLA_WEB_PORT}/${NC}"
+        else
+            echo -e "${RED}❌ ella-web läuft nicht.${NC}"
+        fi
+        ;;
+    install)
+        echo -e "${CYAN}🌐 Installiere ella-web als systemd-Service (autostart)...${NC}"
+        UNIT_DIR="$BOT_USER_HOME/.config/systemd/user"
+        bot_run "mkdir -p '$UNIT_DIR'"
+        SERVICE_CONTENT="[Unit]
+Description=Ella Web — Status/Skills-Seite
+
+[Service]
+Type=simple
+Environment=BOT_USER_HOME=$BOT_USER_HOME
+ExecStart=/usr/bin/python3 $BASE_DIR/ella-web.py $ELLA_WEB_PORT
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"
+        bot_python3 -c "import sys; open(sys.argv[1], 'w').write(sys.argv[2])" "$UNIT_DIR/ella-web.service" "$SERVICE_CONTENT"
+        bot_run "export XDG_RUNTIME_DIR=/run/user/\$(id -u); systemctl --user daemon-reload && systemctl --user enable --now ella-web.service"
+        echo -e "${GREEN}✅ ella-web läuft dauerhaft → http://localhost:${ELLA_WEB_PORT}/${NC}"
+        ;;
+    --help|-h)
+        echo -e "${BLUE}${BOLD}🌐 ELLA WEB${NC}"
+        echo -e "  ${GREEN}ella web start${NC}     Einmalig starten"
+        echo -e "  ${GREEN}ella web stop${NC}      Stoppen"
+        echo -e "  ${GREEN}ella web restart${NC}   Neustart"
+        echo -e "  ${GREEN}ella web status${NC}    Status"
+        echo -e "  ${GREEN}ella web install${NC}   Als systemd-Service einrichten (autostart, persistent)"
+        ;;
+    *)
+        echo -e "${RED}❌ Unbekannter web-Befehl: $CMD${NC}"
+        exit 1
+        ;;
+esac

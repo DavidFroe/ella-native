@@ -1,0 +1,16 @@
+
+# ================================================================
+# ELLA KONFIGURATION (Beispiel) — nach ella.conf kopieren und anpassen
+# ================================================================
+
+# Bot-User: Unter welchem Linux-User läuft OpenClaw / der Bot?
+# Auf einer einfachen Single-User-Maschine: einfach weglassen, dann
+# wird automatisch der aktuelle User verwendet (siehe ella-core Fallback).
+# Nur setzen, wenn der Bot unter einem ANDEREN Linux-User laufen soll
+# als dem, der "ella" aufruft (Admin verwaltet einen separaten Bot-Account).
+#export BOT_USER="klauski"
+
+# DeepThink: Wartezeit (Sekunden) pro Runde
+export DEEPTHINK_TIMEOUT=60
+
+export ELLA_SUDO_LOG="$HOME/.ella_sudo.log"

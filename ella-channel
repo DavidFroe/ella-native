@@ -11,11 +11,10 @@ CHANNEL="$2"
 PARAM="$3"
 EXTRA="$4"
 
-# Pfad zur OpenClaw-Config (klauski-User oder eigene)
+# Pfad zur OpenClaw-Config (BOT_USER oder eigene)
 resolve_openclaw_config() {
-    # Bevorzuge klauski-User-Config wenn vorhanden
-    if [ -f "/home/klauski/.openclaw/openclaw.json" ]; then
-        echo "/home/klauski/.openclaw/openclaw.json"
+    if [ -f "$BOT_OPENCLAW_JSON" ]; then
+        echo "$BOT_OPENCLAW_JSON"
     elif [ -f "$HOME/.openclaw/openclaw.json" ]; then
         echo "$HOME/.openclaw/openclaw.json"
     else
@@ -298,7 +297,7 @@ if "telegram" not in allow_from:
 with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
 print("OK")
 PYEOF
-            chown klauski:klauski "$CFG_PATH" 2>/dev/null || true
+            chown "$BOT_USER:$BOT_USER" "$CFG_PATH" 2>/dev/null || true
             echo -e "${GREEN}✅ Elevated aktiviert — Bot kann sudo/Root-Befehle ausführen.${NC}"
             _tele_groups_restart_hint
             ;;
@@ -315,7 +314,7 @@ elevated["enabled"] = False
 with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
 print("OK")
 PYEOF
-            chown klauski:klauski "$CFG_PATH" 2>/dev/null || true
+            chown "$BOT_USER:$BOT_USER" "$CFG_PATH" 2>/dev/null || true
             echo -e "${GREEN}✅ Elevated deaktiviert — sudo-Befehle vom Bot gesperrt.${NC}"
             _tele_groups_restart_hint
             ;;
@@ -346,7 +345,7 @@ else:
     print("EXISTS")
 with open(path, "w") as f: json.dump(cfg, f, indent=2, ensure_ascii=False)
 PYEOF
-            chown klauski:klauski "$CFG_PATH" 2>/dev/null || true
+            chown "$BOT_USER:$BOT_USER" "$CFG_PATH" 2>/dev/null || true
             echo -e "${GREEN}✅ $PROVIDER/$SENDER_ID freigegeben.${NC}"
             _tele_groups_restart_hint
             ;;
@@ -372,7 +371,7 @@ if sender in senders:
 else:
     print("NOT_FOUND")
 PYEOF
-            chown klauski:klauski "$CFG_PATH" 2>/dev/null || true
+            chown "$BOT_USER:$BOT_USER" "$CFG_PATH" 2>/dev/null || true
             echo -e "${GREEN}✅ $PROVIDER/$SENDER_ID entfernt.${NC}"
             _tele_groups_restart_hint
             ;;

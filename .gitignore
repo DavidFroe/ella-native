@@ -19,6 +19,16 @@
 # User-specific Configs (Tokens!)
 openclaw.json
 ella.conf
+owltrail.conf
+
+# Laufzeit-Status (pro Deployment unterschiedlich, kein Quellcode)
+.ella_token_budget.json
+.ella_crash_state.json
+.ella_task.json
+.ella_web_assets/
+
+# Claude Code lokale Settings (maschinenspezifisch)
+.claude/
 
 # Temporary Files
 *.bak
