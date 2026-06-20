@@ -137,7 +137,6 @@ case "$SUB" in
         INTERVAL=$(_load_field interval_seconds 900)
         MODEL=$(_load_field model_id 124)
         CTX=$(_load_field context_cap_tokens 32000)
-        ROT=$(_load_field rotation_index 0)
         LAST=$(_load_field last_run_at "noch nie")
         echo -e "${BLUE}${BOLD}🔁 Bigloop Status${NC}"
         if [ "$ENABLED" = "True" ]; then
@@ -148,8 +147,24 @@ case "$SUB" in
         echo -e "  Intervall:     ${INTERVAL}s"
         echo -e "  Modell:        ${MODEL}"
         echo -e "  Kontext-Cap:   ${CTX} Token"
-        echo -e "  Rotation-Idx:  ${ROT}"
         echo -e "  Letzter Lauf:  ${GREY}${LAST}${NC}"
+        bot_python3 -c "
+import sys
+sys.path.insert(0, '$BASE_DIR')
+import importlib.util
+spec = importlib.util.spec_from_file_location('bigloop', '$BASE_DIR/ella-bigloop.py')
+bl = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bl)
+cfg = bl.load_config()
+keys = bl.list_session_keys()
+reviews = cfg.get('session_reviews', {})
+cands = bl.changed_candidates(keys, reviews)
+GREY='\033[90m'; YELLOW='\033[33m'; R='\033[0m'
+if cands:
+    print(f'  Warten auf Pruefung: {YELLOW}{len(cands)}{R} von {len(keys)} Sessions')
+else:
+    print(f'  Warten auf Pruefung: {GREY}keine -- System ruht{R} ({len(keys)} Sessions bekannt, alle aktuell)')
+" 2>/dev/null
         echo -e "  Laeuft nur, wenn keine 'Grosse Aufgabe' aktiv ist."
         ;;
 

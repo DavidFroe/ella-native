@@ -32,8 +32,16 @@ DEFAULTS = {
     "interval_seconds": 900,
     "model_id": "124",
     "context_cap_tokens": 32000,
-    "rotation_index": 0,
     "last_run_at": None,
+    # {session_key: iso_timestamp_der_letzten_pruefung} -- ersetzt die
+    # frühere blinde Rotation. Eine Session wird nur dann erneut geprueft,
+    # wenn sie seit ihrem letzten Eintrag hier NEUE Nachrichten bekommen hat
+    # (siehe _changed_sessions()). Damit kommt das System in einen Ruhezustand,
+    # sobald alle Sessions einmal als "OK" befunden wurden und niemand mehr
+    # schreibt -- statt staendig dieselben unveraenderten Sessions
+    # durchzurotieren (unnoetiger Overhead + Risiko seltsamer Ergebnisse bei
+    # wiederholtem Pruefen ohnehin abgeschlossener Unterhaltungen).
+    "session_reviews": {},
 }
 
 # Synthetische Sessions, die kein echtes Nutzergespraech sind.
@@ -88,6 +96,55 @@ def session_id_for(key):
         return store.get(key, {}).get("sessionId")
     except Exception:
         return None
+
+
+def session_last_message_ms(session_id):
+    """Unix-Zeitstempel (Millisekunden) der letzten Nachricht in der Session,
+    oder 0 wenn nicht ermittelbar. Liest nur das Dateiende, nicht die ganze
+    (potenziell sehr grosse) Datei."""
+    path = os.path.join(SESSIONS_DIR, session_id + ".jsonl")
+    try:
+        size = os.path.getsize(path)
+        with open(path, encoding="utf-8", errors="replace") as f:
+            if size > 4000:
+                f.seek(size - 4000)
+            chunk = f.read()
+        for line in reversed([l for l in chunk.strip().split("\n") if l.strip()]):
+            try:
+                d = json.loads(line)
+                ts = d.get("message", {}).get("timestamp") or d.get("timestamp")
+                if ts:
+                    return int(ts)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return 0
+
+
+def changed_candidates(keys, reviews):
+    """Liefert (key, sessionId, last_msg_ms) fuer alle Sessions, die seit
+    ihrer letzten Pruefung (reviews[key]) neue Nachrichten bekommen haben --
+    sortiert nach "am laengsten nicht geprueft" zuerst."""
+    candidates = []
+    for key in keys:
+        sid = session_id_for(key)
+        if not sid:
+            continue
+        last_msg_ms = session_last_message_ms(sid)
+        if not last_msg_ms:
+            continue
+        last_reviewed_iso = reviews.get(key)
+        last_reviewed_ms = 0
+        if last_reviewed_iso:
+            try:
+                last_reviewed_ms = datetime.datetime.fromisoformat(last_reviewed_iso).timestamp() * 1000
+            except Exception:
+                last_reviewed_ms = 0
+        if last_msg_ms > last_reviewed_ms:
+            candidates.append((key, sid, reviews.get(key, "")))
+    candidates.sort(key=lambda c: c[2])  # nie geprueft ("") zuerst, sonst aelteste Pruefung zuerst
+    return candidates
 
 
 def extract_clean_transcript(session_id, max_chars=40_000):
@@ -186,7 +243,7 @@ def main():
     cfg = load_config()
     _dbg(debug, f"config: enabled={cfg.get('enabled')} interval={cfg.get('interval_seconds')}s "
                 f"model={cfg.get('model_id')} context_cap={cfg.get('context_cap_tokens')} "
-                f"rotation_index={cfg.get('rotation_index')} last_run_at={cfg.get('last_run_at')}")
+                f"last_run_at={cfg.get('last_run_at')} bekannte Sessions={len(cfg.get('session_reviews', {}))}")
 
     if not cfg.get("enabled") and not force:
         _dbg(debug, "EXIT: bigloop ist deaktiviert (ella bigloop on)")
@@ -212,21 +269,31 @@ def main():
         _dbg(debug, "EXIT: keine Sessions vorhanden")
         return
 
-    idx = cfg.get("rotation_index", 0) % len(keys)
-    session_key = keys[idx]
-    cfg["rotation_index"] = (idx + 1) % len(keys)
-    _dbg(debug, f"gewaehlt (Rotation-Index {idx}): {session_key}")
+    reviews = cfg.setdefault("session_reviews", {})
+    # Reviews fuer inzwischen verschwundene Sessions aufraeumen
+    for stale_key in list(reviews.keys()):
+        if stale_key not in keys:
+            del reviews[stale_key]
 
-    # WICHTIG: last_run_at wird bewusst erst NACH dem (blockierenden) Review
-    # gespeichert (im finally-Block unten), nicht schon hier vor dem Gemma-
-    # Aufruf. Die Inferenz kann je nach Backend-Last deutlich laenger dauern
-    # als das konfigurierte Intervall -- wuerde man den Zeitstempel schon
-    # beim Start setzen, koennte der naechste Timer-Tick faelschlich denken,
-    # das Intervall sei schon abgelaufen, und einen ZWEITEN, ueberlappenden
-    # Lauf starten (Rueckstau / Race auf rotation_index, genau das hat die
-    # Sprung-Werte beim Testen verursacht).
+    candidates = changed_candidates(keys, reviews)
+    _dbg(debug, f"{len(candidates)} von {len(keys)} Session(s) haben sich seit der letzten Pruefung veraendert")
+    if not candidates:
+        _dbg(debug, "EXIT: keine Session hat neue Nachrichten seit ihrer letzten Pruefung -- System ruht.")
+        save_config(cfg)  # ggf. aufgeraeumte reviews trotzdem sichern
+        return
+
+    session_key, session_id_hint, _ = candidates[0]
+    _dbg(debug, f"gewaehlt (laengste nicht geprueft): {session_key}")
+
+    # WICHTIG: last_run_at/reviews[session_key] werden bewusst erst NACH dem
+    # (blockierenden) Review gespeichert (im finally-Block unten), nicht
+    # schon hier vor dem Gemma-Aufruf. Die Inferenz kann je nach Backend-Last
+    # deutlich laenger dauern als das konfigurierte Intervall -- wuerde man
+    # den Zeitstempel schon beim Start setzen, koennte der naechste Timer-
+    # Tick faelschlich denken, das Intervall sei schon abgelaufen, und einen
+    # ZWEITEN, ueberlappenden Lauf starten.
     try:
-        session_id = session_id_for(session_key)
+        session_id = session_id_hint
         if not session_id:
             _info(f"reviewed session={session_key} -> ABBRUCH (keine sessionId gefunden)")
             return
@@ -258,6 +325,7 @@ def main():
         _info(f"reviewed session={session_key} id={session_id} model={model_id} -> FOLLOWUP: {followup_prompt.splitlines()[0][:100]}")
     finally:
         cfg["last_run_at"] = now().isoformat()
+        reviews[session_key] = now().isoformat()
         save_config(cfg)
 
     fd, prompt_file = tempfile.mkstemp(dir=BOT_USER_HOME, prefix=".ella_bigloop_prompt_")
