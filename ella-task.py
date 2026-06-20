@@ -20,6 +20,7 @@ EMPTY = {
     "recovered_at": None,
     "retry_count": 0,
     "kind": None,
+    "last_nudge_at": None,
 }
 
 
@@ -60,7 +61,7 @@ def main():
         save(path, {
             "task": desc, "session_key": session, "status": "in_progress",
             "started_at": now_iso(), "last_heartbeat": now_iso(), "recovered_at": None,
-            "retry_count": 0, "kind": kind,
+            "retry_count": 0, "kind": kind, "last_nudge_at": now_iso(),
         })
         print("OK")
 
@@ -93,6 +94,7 @@ def main():
         data["status"] = "in_progress"
         data["last_heartbeat"] = now_iso()
         data["recovered_at"] = now_iso()
+        data["last_nudge_at"] = now_iso()
         save(path, data)
         print(data["retry_count"])
 
@@ -110,6 +112,7 @@ def main():
         print(f"STATUS:{status}")
         print(f"RETRY_COUNT:{data.get('retry_count', 0)}")
         print(f"KIND:{data.get('kind') or ''}")
+        print(f"LAST_NUDGE_AT:{data.get('last_nudge_at') or ''}")
         if status == "in_progress" and data.get("task"):
             hb = data.get("last_heartbeat")
             age_min = -1

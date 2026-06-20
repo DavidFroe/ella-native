@@ -144,6 +144,48 @@ _do_crash_recovery() {
     _notify_session "$session" "⚠️ Ich bin wegen eines Kontext-Ueberlaufs abgestuerzt. Hab den Verlauf analysiert und mache automatisch weiter: $label"
 }
 
+# Prueft, ob die Session seit dem letzten Anstoss (last_nudge_at) ueberhaupt
+# eine neue Nachricht bekommen hat. Gibt "NEW" (etwas Neues -> Gemma fragen
+# lohnt sich), "SAME" (nichts Neues -> Gemma-Abfrage waere sinnlos) oder
+# "UNKNOWN" (im Zweifel wie NEW behandeln) zurueck.
+_session_changed_since() {
+    local session="$1" last_nudge_at="$2"
+    bot_python3 -c "
+import datetime, json, os, sys, time
+
+sessions_dir, key, last_nudge_at = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(os.path.join(sessions_dir, 'sessions.json'), encoding='utf-8') as f:
+        store = json.load(f)
+    sid = store.get(key, {}).get('sessionId')
+    if not sid:
+        print('UNKNOWN'); sys.exit(0)
+    path = os.path.join(sessions_dir, sid + '.jsonl')
+    size = os.path.getsize(path)
+    with open(path, encoding='utf-8', errors='replace') as f:
+        if size > 4000:
+            f.seek(size - 4000)
+        chunk = f.read()
+    last_ts_ms = 0
+    for line in reversed([l for l in chunk.strip().split(chr(10)) if l.strip()]):
+        try:
+            d = json.loads(line)
+            ts = d.get('message', {}).get('timestamp') or d.get('timestamp')
+            if ts:
+                last_ts_ms = int(ts)
+                break
+        except Exception:
+            continue
+    if not last_nudge_at:
+        print('NEW' if last_ts_ms else 'UNKNOWN'); sys.exit(0)
+    nudge_dt = datetime.datetime.fromisoformat(last_nudge_at)
+    nudge_ms = time.mktime(nudge_dt.timetuple()) * 1000
+    print('NEW' if last_ts_ms > nudge_ms else 'SAME')
+except Exception:
+    print('UNKNOWN')
+" "$SESSIONS_DIR" "$session" "$last_nudge_at" 2>/dev/null
+}
+
 # Lässt Gemma anhand der juengsten Nachrichten in der Session beurteilen, ob
 # eine automatisch erstellte Aufgabe (Crash-Recovery ODER Bigloop-Nachhaken)
 # erledigt ist (DONE/NOT_DONE). Robuster als ein reiner Lebenszeichen-Ping,
@@ -253,6 +295,7 @@ except Exception:
         RETRY_COUNT=$(echo "$OUT" | grep '^RETRY_COUNT:' | cut -d: -f2-)
         RETRY_COUNT="${RETRY_COUNT:-0}"
         KIND=$(echo "$OUT" | grep '^KIND:' | cut -d: -f2-)
+        LAST_NUDGE_AT=$(echo "$OUT" | grep '^LAST_NUDGE_AT:' | cut -d: -f2-)
         MAX_RETRIES="${ELLA_WATCHDOG_MAX_RETRIES:-2}"
         EFFECTIVE_STALE_MIN="$STALE_MIN"
         case "$KIND" in
@@ -270,15 +313,47 @@ except Exception:
             exit 0
         fi
 
+        # --- Automatisch erstellte Aufgaben (Bigloop/Crash-Recovery): kein
+        # generischer Ping auf eine fremde Test-Session -- stattdessen ein
+        # viel praeziseres Signal: gab es seit dem letzten Anstoss UEBERHAUPT
+        # neue Aktivitaet in GENAU dieser Session? Wenn nein, ist eine
+        # Gemma-Abfrage sinnlos (nichts zu bewerten) -- direkt erneut anstossen.
+        # Wenn ja, erst dann Gemma fragen, ob's jetzt erledigt ist.
         if [ "$KIND" = "crash_recovery" ] || [ "$KIND" = "bigloop_followup" ]; then
-            VERDICT=$(_judge_task_done "$SESSION" "$TASK")
-            if [ "$VERDICT" = "DONE" ]; then
-                bot_python3 "$BASE_DIR/ella-task.py" done "$ELLA_TASK_FILE" > /dev/null
-                _log "Automatische Aufgabe ($KIND) laut Gemma erledigt: $TASK"
-                echo -e "${GREEN}✅ Watchdog: Aufgabe laut Gemma erledigt.${NC}"
-                exit 0
+            CHANGED=$(_session_changed_since "$SESSION" "$LAST_NUDGE_AT")
+            if [ "$CHANGED" = "SAME" ]; then
+                _log "Keine neue Aktivitaet seit letztem Anstoss in $SESSION -- Gemma-Abfrage uebersprungen."
+                echo -e "${YELLOW}⏱  Seit dem letzten Anstoß ist nichts Neues passiert — stoße direkt erneut an.${NC}"
+            else
+                VERDICT=$(_judge_task_done "$SESSION" "$TASK")
+                if [ "$VERDICT" = "DONE" ]; then
+                    bot_python3 "$BASE_DIR/ella-task.py" done "$ELLA_TASK_FILE" > /dev/null
+                    _log "Automatische Aufgabe ($KIND) laut Gemma erledigt: $TASK"
+                    echo -e "${GREEN}✅ Watchdog: Aufgabe laut Gemma erledigt.${NC}"
+                    exit 0
+                fi
+                _log "Automatische Aufgabe ($KIND) laut Gemma noch nicht fertig (oder kein Urteil moeglich): $TASK"
             fi
-            _log "Automatische Aufgabe ($KIND) laut Gemma noch nicht fertig (oder kein Urteil moeglich): $TASK"
+
+            # Gateway neu starten ist hier Pflicht, nicht Option: ohne
+            # Heartbeat koennen wir nicht unterscheiden zwischen "Session
+            # schläft wirklich" und "inferiert noch, hat nur kein Heartbeat
+            # gesendet" -- ein Neustart beendet eine evtl. noch laufende
+            # Inferenz sicher, bevor wir erneut reinjizieren (sonst Risiko
+            # eines Session-Locking-Konflikts wie beim blitzdings-Bug).
+            echo -e "${YELLOW}🔄 Starte Gateway neu...${NC}"
+            bash "$BASE_DIR/ella-openclaw" restart >> "$ELLA_WATCHDOG_LOG" 2>&1
+            if [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ] && [ -n "$SESSION" ] && [ "$SESSION" != "?" ] && [ -n "$TASK" ]; then
+                NEW_COUNT=$(bot_python3 "$BASE_DIR/ella-task.py" retry "$ELLA_TASK_FILE")
+                _log "Stoße automatische Aufgabe erneut an (Versuch ${NEW_COUNT}/${MAX_RETRIES})."
+                echo -e "${YELLOW}🔁 Stoße erneut an (Versuch ${NEW_COUNT}/${MAX_RETRIES})...${NC}"
+                _reinject_task "$SESSION" "$TASK"
+            else
+                bot_python3 "$BASE_DIR/ella-task.py" fail "$ELLA_TASK_FILE" > /dev/null
+                _log "Max. Versuche (${MAX_RETRIES}) erreicht — gebe auf, kein weiterer Auto-Retry."
+                _notify_session "$SESSION" "❌ Ich komme bei \"$TASK\" nach ${MAX_RETRIES} automatischen Versuchen nicht weiter. Bitte manuell prüfen."
+            fi
+            exit 0
         fi
 
         echo -e "${YELLOW}⏱  Heartbeat seit ${AGE} Min. überfällig (Schwelle ${EFFECTIVE_STALE_MIN}m). Bestätige per Ping...${NC}"
