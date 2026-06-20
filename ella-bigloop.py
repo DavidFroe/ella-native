@@ -90,16 +90,60 @@ def session_id_for(key):
         return None
 
 
-def read_session_text(session_id, max_bytes=150_000):
+def extract_clean_transcript(session_id, max_chars=40_000):
+    """Baut aus der rohen .jsonl ein sauberes Dialog-Transkript (nur
+    user/assistant Text), OHNE die rohen Tool-Aufruf-Ergebnisse.
+
+    Wichtig: Tool-Resultate (Exec-Output, Dateilisten etc.) blasen die
+    Zeichenzahl stark auf, tragen aber kaum etwas fuer die Review-
+    Beurteilung bei -- UND tokenisieren wegen der JSON/Escaping-Syntax
+    viel dichter als normaler Flieshtext. Eine Session, die nach
+    Zeichenzahl "passt" (max_chars), kann beim rohen .jsonl trotzdem das
+    echte Kontextfenster des Reviewer-Modells sprengen, weil die
+    Zeichen->Token-Heuristik fuer diese Art Inhalt nicht mehr stimmt.
+    Das saubere Transkript hier ist sowohl kompakter als auch fuer das
+    Reviewer-Modell aussagekraeftiger.
+
+    max_chars=40_000 ist empirisch getestet: bei genau dieser Art Inhalt
+    (Klauski-Dialog) liefen 10K/20K/40K Zeichen zuverlaessig durch, 60K
+    schlug wiederholt mit leerer Antwort fehl -- vermutlich eine reale
+    Kontextfenster-/Verarbeitungsgrenze des Reviewer-Modells, kein
+    Zufallsfehler. 40K als sicherer Standard mit etwas Abstand."""
     path = os.path.join(SESSIONS_DIR, session_id + ".jsonl")
+    lines_out = []
     try:
-        size = os.path.getsize(path)
         with open(path, encoding="utf-8", errors="replace") as f:
-            if size > max_bytes:
-                f.seek(size - max_bytes)
-            return f.read()
+            for raw_line in f:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    d = json.loads(raw_line)
+                except Exception:
+                    continue
+                msg = d.get("message", {})
+                role = msg.get("role")
+                if role not in ("user", "assistant"):
+                    continue
+                content = msg.get("content")
+                text_parts = []
+                if isinstance(content, str):
+                    text_parts.append(content)
+                elif isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            text_parts.append(c.get("text", ""))
+                text = "\n".join(t for t in text_parts if t).strip()
+                if text:
+                    lines_out.append(f"{role}: {text}")
     except Exception:
         return None
+    full = "\n\n".join(lines_out)
+    if not full:
+        return None
+    if len(full) > max_chars:
+        full = "[...gekuerzt...]\n" + full[-max_chars:]
+    return full
 
 
 def review_with_gemma(text, model_id, context_cap_tokens):
@@ -186,11 +230,11 @@ def main():
         if not session_id:
             _info(f"reviewed session={session_key} -> ABBRUCH (keine sessionId gefunden)")
             return
-        text = read_session_text(session_id)
+        text = extract_clean_transcript(session_id)
         if not text or not text.strip():
             _info(f"reviewed session={session_key} id={session_id} -> ABBRUCH (Transkript leer/nicht lesbar)")
             return
-        _dbg(debug, f"Transkript gelesen: {len(text)} Zeichen (sessionId={session_id})")
+        _dbg(debug, f"Sauberes Transkript extrahiert: {len(text)} Zeichen (sessionId={session_id})")
 
         model_id = cfg.get("model_id")
         context_cap = cfg.get("context_cap_tokens")
