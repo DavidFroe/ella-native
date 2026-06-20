@@ -527,11 +527,20 @@ def render_page():
         )
 
     task_html = '<p class="muted">Kein aktiver Auftrag.</p>'
+    flagged_session_key = ""
+    flagged_session_label = ""
     if task and task.get("status") == "in_progress" and task.get("task"):
-        kind_badge = (
-            '<span class="badge crash">🚨 Auto-Crash-Recovery</span> '
-            if task.get("kind") == "crash_recovery" else ""
-        )
+        task_kind = task.get("kind")
+        if task_kind == "crash_recovery":
+            kind_badge = '<span class="badge crash">🚨 Auto-Crash-Recovery</span> '
+            flagged_session_label = "🚨 Crash-Recovery"
+        elif task_kind == "bigloop_followup":
+            kind_badge = '<span class="badge crash">🔁 Bigloop-Nachhaken</span> '
+            flagged_session_label = "🔁 Nachhaken"
+        else:
+            kind_badge = ""
+        if task_kind in ("crash_recovery", "bigloop_followup"):
+            flagged_session_key = task.get("session_key") or ""
         task_html = (
             f'<p>{kind_badge}<b>📋 {html.escape(task["task"])}</b><br>'
             f'<span class="muted">seit {html.escape(task.get("started_at") or "?")}</span></p>'
@@ -665,6 +674,7 @@ def render_page():
   .badge.down {{ background:#3a1414; color:#ff8080; }}
   .badge.alc {{ background:#3a2a0d; color:#ffc56b; }}
   .badge.crash {{ background:#3a1414; color:#ff8080; }}
+  tr.flagged {{ background:#2a1414; }}
   .muted {{ color:#8a8f98; font-size:0.9em; }}
   ul {{ list-style:none; padding:0; margin:0; }}
   li {{ padding:8px 0; border-bottom:1px solid #22262f; }}
@@ -763,6 +773,9 @@ function esc(s) {{
   return d.innerHTML;
 }}
 
+const FLAGGED_SESSION_KEY = {json.dumps(flagged_session_key)};
+const FLAGGED_SESSION_LABEL = {json.dumps(flagged_session_label)};
+
 async function loadSessions() {{
   const title = document.getElementById('sessions-title');
   const table = document.getElementById('sessions-table');
@@ -778,7 +791,10 @@ async function loadSessions() {{
       const ctxMax = s.contextTokens || 0;
       const pct = ctxMax ? Math.round(ctxUsed / ctxMax * 100) + '%' : '?';
       const ageMin = Math.floor((s.ageMs || 0) / 60000);
-      rows += '<tr><td>' + esc(s.kind || '?') + '</td><td class="mono">' + esc(keyShort) + '</td>' +
+      const isFlagged = FLAGGED_SESSION_KEY && key === FLAGGED_SESSION_KEY;
+      const rowClass = isFlagged ? ' class="flagged"' : '';
+      const flagMark = isFlagged ? ' <span class="badge crash">' + esc(FLAGGED_SESSION_LABEL) + '</span>' : '';
+      rows += '<tr' + rowClass + '><td>' + esc(s.kind || '?') + '</td><td class="mono">' + esc(keyShort) + flagMark + '</td>' +
         '<td>' + esc(String(s.model || '?')) + '</td><td>' + ctxUsed + '/' + ctxMax + ' (' + pct + ')</td>' +
         '<td>' + ageMin + 'm</td><td><form method="post" action="/api/session/clear" ' +
         'onsubmit="return confirm(\\'Session wirklich löschen?\\');">' +
