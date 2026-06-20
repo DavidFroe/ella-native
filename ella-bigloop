@@ -213,8 +213,11 @@ else:
             # Eigene, klar erkennbare Nachricht VOR dem Reinject -- damit im
             # Chat sichtbar ist, dass hier die Bigloop (nicht der Nutzer)
             # eingegriffen hat, statt dass der Bot ploetzlich unerklaert
-            # etwas Neues sagt.
-            _notify_session "$SESSION" "🔁 [Automatische Nachprüfung] Mir ist aufgefallen, dass ich hier evtl. kein vollständiges Ergebnis geliefert habe — ich hake nochmal nach."
+            # etwas Neues sagt. WICHTIG: den tatsaechlichen Auftragstext
+            # ($LABEL) zeigen, nicht nur eine generische Platzhalter-Phrase --
+            # sonst sieht jede Nachprüfung im Chat identisch aus, egal was
+            # Gemma konkret bemaengelt hat.
+            _notify_session "$SESSION" "🔁 [Automatische Nachprüfung] $LABEL"
             _reinject_task "$SESSION" "$FULL_PROMPT"
         done <<< "$OUT"
         ;;
