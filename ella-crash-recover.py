@@ -222,7 +222,7 @@ def main():
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(prompt)
 
-        label = prompt.splitlines()[0][:120] if prompt else "Kontext-Ueberlauf"
+        label = prompt.splitlines()[0][:220] if prompt else "Kontext-Ueberlauf"
         state["recovery_attempts"][session_key] = attempts + 1
         state["last_action"][session_key] = now().isoformat()
         state["session_failures"][session_key] = []

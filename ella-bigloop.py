@@ -264,7 +264,7 @@ def main():
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(followup_prompt)
 
-    label = followup_prompt.splitlines()[0][:120]
+    label = followup_prompt.splitlines()[0][:220]
     print(f"FOLLOWUP\t{session_key}\t{prompt_file}\t{label}")
 
 
