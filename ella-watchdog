@@ -347,6 +347,10 @@ except Exception:
                 NEW_COUNT=$(bot_python3 "$BASE_DIR/ella-task.py" retry "$ELLA_TASK_FILE")
                 _log "Stoße automatische Aufgabe erneut an (Versuch ${NEW_COUNT}/${MAX_RETRIES})."
                 echo -e "${YELLOW}🔁 Stoße erneut an (Versuch ${NEW_COUNT}/${MAX_RETRIES})...${NC}"
+                # Sichtbar im Chat posten, WAS gerade (erneut) angewiesen wird --
+                # sonst sieht man im Verlauf nur Klauskis Reaktion, nicht den
+                # eigentlichen (Zwischen-)Auftrag, den das System gerade durchsetzt.
+                _notify_session "$SESSION" "🔁 [Automatischer Anstoß, Versuch ${NEW_COUNT}/${MAX_RETRIES}] $TASK"
                 _reinject_task "$SESSION" "$TASK"
             else
                 bot_python3 "$BASE_DIR/ella-task.py" fail "$ELLA_TASK_FILE" > /dev/null
